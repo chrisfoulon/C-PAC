@@ -1197,7 +1197,7 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
                 func_paths_dict = sub_dict['rest']
 
             func_wf = create_func_datasource(func_paths_dict,
-                                            'func_gather_%d' % num_strat)
+                                             'func_gather_%d' % num_strat)
             func_wf.inputs.inputnode.set(
                 subject=subject_id,
                 creds_path=input_creds_path,
@@ -1306,9 +1306,9 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
 
             # connect the other input parameters
             workflow.connect(scan_params, 'start_indx',
-                            trunc_wf, 'inputspec.start_idx')
+                             trunc_wf, 'inputspec.start_idx')
             workflow.connect(scan_params, 'stop_indx',
-                            trunc_wf, 'inputspec.stop_idx')
+                             trunc_wf, 'inputspec.stop_idx')
 
             # replace the leaf node with the output from the recently added
             # workflow
@@ -1403,7 +1403,7 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
                 node, out_file = strat.get_leaf_properties()
 
                 workflow.connect(node, out_file,
-                                func_slice_timing_correction, 'in_file')
+                                 func_slice_timing_correction, 'in_file')
 
                 # TODO ASH normalize TR w schema validation
                 # we might prefer to use the TR stored in the NIFTI header

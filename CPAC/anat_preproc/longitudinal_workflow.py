@@ -7,23 +7,30 @@ import shutil
 from nipype import config
 from nipype import logging
 import nipype.pipeline.engine as pe
+import nipype.interfaces.afni as afni
 
 import CPAC
 from CPAC.utils.datasource import (
     create_anat_datasource,
+    create_func_datasource,
     create_check_for_s3_node
 )
 
 from CPAC.anat_preproc.anat_preproc import create_anat_preproc
-from CPAC.anat_preproc.func_preproc import create_func_preproc
+from CPAC.func_preproc.func_preproc import (
+    create_func_preproc,
+    create_wf_edit_func
+)
 from CPAC.anat_preproc.longitudinal_preproc import template_creation_flirt
 
-from CPAC.utils import Strategy, find_files
+from CPAC.utils import Strategy, find_files, function
 
 from CPAC.utils.utils import (
     create_log,
     check_config_resources,
-    check_system_deps
+    check_system_deps,
+    get_scan_params,
+    get_tr
 )
 
 logger = logging.getLogger('nipype.workflow')
@@ -196,8 +203,183 @@ def init_subject_wf(sub_dict, conf):
 
     return c, subject_id, input_creds_path
 
-def func_template_generation(sessions, conf):
-    for ses in sessions:
+def func_template_generation(sub_list, conf):
+    for func in sub_list:
+        """
+        truncate
+        (Func_preproc){
+        two step motion corr 
+        refit 
+        resample
+        motion corr
+        skullstripping
+        mean + median
+        }  
+        dist corr and apply dist corr res
+        config file registration target (epi t1)
+        """
+        if 'func' in func or 'rest' in func:
+            if 'func' in sub_list:
+                func_paths_dict = sub_list['func']
+            else:
+                func_paths_dict = sub_list['rest']
+
+            subject_id = sub_list['subject_id']
+
+            try:
+                creds_path = sub_list['creds_path']
+                if creds_path and 'none' not in creds_path.lower():
+                    if os.path.exists(creds_path):
+                        input_creds_path = os.path.abspath(creds_path)
+                    else:
+                        err_msg = 'Credentials path: "%s" for subject "%s" was not ' \
+                                  'found. Check this path and try again.' % (
+                                      creds_path, subject_id)
+                        raise Exception(err_msg)
+                else:
+                    input_creds_path = None
+            except KeyError:
+                input_creds_path = None
+
+            func_wf = create_func_datasource(func_paths_dict,
+                                             'func_gather_%d' % str(subject_id))
+            func_wf.inputs.inputnode.set(
+                subject=subject_id,
+                creds_path=input_creds_path,
+                dl_dir=conf.workingDirectory
+            )
+            func_wf.get_node('inputnode').iterables = \
+                ("scan", func_paths_dict.keys())
+
+            # Add in nodes to get parameters from configuration file
+            # a node which checks if scan_parameters are present for each scan
+            scan_params = \
+                pe.Node(
+                    function.Function(input_names=['data_config_scan_params',
+                                                   'subject_id',
+                                                   'scan',
+                                                   'pipeconfig_tr',
+                                                   'pipeconfig_tpattern',
+                                                   'pipeconfig_start_indx',
+                                                   'pipeconfig_stop_indx'],
+                                      output_names=['tr',
+                                                    'tpattern',
+                                                    'ref_slice',
+                                                    'start_indx',
+                                                    'stop_indx'],
+                                      function=get_scan_params,
+                                      as_module=True),
+                    name='scan_params_%d' % str(subject_id))
+
+            workflow_name = 'resting_preproc_' + str(subject_id)
+            workflow = pe.Workflow(name=workflow_name)
+            workflow.base_dir = conf.workingDirectory
+            workflow.config['execution'] = {
+                'hash_method': 'timestamp',
+                'crashdump_dir': os.path.abspath(conf.crashLogDirectory)
+            }
+
+            if "Selected Functional Volume" in conf.func_reg_input:
+                get_func_volume = pe.Node(interface=afni.Calc(),
+                                          name='get_func_volume_%d' % str(
+                                              subject_id))
+
+                get_func_volume.inputs.set(
+                    expr='a',
+                    single_idx=conf.func_reg_input_volume,
+                    outputtype='NIFTI_GZ'
+                )
+                workflow.connect(func_wf, 'outputspec.rest',
+                                 get_func_volume, 'in_file_a')
+
+            # wire in the scan parameter workflow
+            workflow.connect(func_wf, 'outputspec.scan_params',
+                             scan_params, 'data_config_scan_params')
+
+            workflow.connect(func_wf, 'outputspec.subject',
+                             scan_params, 'subject_id')
+
+            workflow.connect(func_wf, 'outputspec.scan',
+                             scan_params, 'scan')
+
+            # connect in constants
+            scan_params.inputs.set(
+                pipeconfig_tr=conf.TR,
+                pipeconfig_tpattern=conf.slice_timing_pattern,
+                pipeconfig_start_indx=conf.startIdx,
+                pipeconfig_stop_indx=conf.stopIdx
+            )
+
+            # node to convert TR between seconds and milliseconds
+            convert_tr = pe.Node(function.Function(input_names=['tr'],
+                                                   output_names=['tr'],
+                                                   function=get_tr,
+                                                   as_module=True),
+                                 name='convert_tr_%d' % str(subject_id))
+
+            # strat.update_resource_pool({
+            #     'raw_functional': (func_wf, 'outputspec.rest'),
+            #     'scan_id': (func_wf, 'outputspec.scan')
+            # })
+
+            trunc_wf = create_wf_edit_func(
+                wf_name="edit_func_%d" % str(subject_id)
+            )
+
+            # connect the functional data from the leaf node into the wf
+            workflow.connect(func_wf, 'outputspec.rest',
+                             trunc_wf, 'inputspec.func')
+
+            # connect the other input parameters
+            workflow.connect(scan_params, 'start_indx',
+                             trunc_wf, 'inputspec.start_idx')
+            workflow.connect(scan_params, 'stop_indx',
+                             trunc_wf, 'inputspec.stop_idx')
+
+        # replace the leaf node with the output from the recently added
+        # workflow
+        # strat.set_leaf_properties(trunc_wf, 'outputspec.edited_func')
+
+            # Functional Image Preprocessing Workflow
+            if 1 in conf.gen_custom_template:
+                meth = 'median'
+            else:
+                meth = 'mean'
+
+            if (isinstance(conf.functionalMasking, list) and
+                    len(conf.functionalMasking) > 1):
+                # For now, we just skullstrip using the first method selected
+                func_masking = conf.functionalMasking[0]
+            else:
+                func_masking = conf.functionalMasking
+
+            if func_masking == '3dAutoMask':
+                func_preproc = create_func_preproc(
+                    use_bet=False,
+                    meth=meth,
+                    wf_name='func_preproc_automask_%d' % str(subject_id)
+                )
+
+                workflow.connect(trunc_wf, 'outputspec.edited_func',
+                                 func_preproc, 'inputspec.func')
+
+                func_preproc.inputs.inputspec.twopass = \
+                    getattr(conf, 'functional_volreg_twopass', True)
+
+            if func_masking == 'BET':
+                func_preproc = create_func_preproc(use_bet=True,
+                                                   meth=meth,
+                                                   wf_name='func_preproc_bet_%d' % num_strat)
+
+                workflow.connect(trunc_wf, 'outputspec.edited_func',
+                                 func_preproc, 'inputspec.func')
+
+                func_preproc.inputs.inputspec.twopass = \
+                    getattr(conf, 'functional_volreg_twopass', True)
+
+            func_preproc,
+            'outputspec.preprocessed'
+
 
         create_func_preproc()
 

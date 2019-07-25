@@ -107,7 +107,7 @@ def create_wf_edit_func(wf_name="edit_func"):
 
 
 # functional preprocessing
-def create_func_preproc(use_bet=False, wf_name='func_preproc'):
+def create_func_preproc(use_bet=False, meth='mean', wf_name='func_preproc'):
     """
 
     The main purpose of this workflow is to process functional data. Raw rest file is deobliqued and reoriented
@@ -471,7 +471,6 @@ def create_func_preproc(use_bet=False, wf_name='func_preproc'):
 
     preproc.connect(func_mean_skullstrip, 'out_file',
                     output_node, 'example_func')
-
 
     func_median_skullstrip = pe.Node(interface=afni_utils.TStat(),
                                    name='func_median_skullstrip')
