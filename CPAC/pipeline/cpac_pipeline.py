@@ -1461,6 +1461,7 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
 
                 func_preproc = create_func_preproc(
                     use_bet=False,
+                    meth=c.,
                     wf_name='func_preproc_automask_%d' % num_strat
                 )
 

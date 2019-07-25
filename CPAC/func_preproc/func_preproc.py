@@ -462,8 +462,12 @@ def create_func_preproc(use_bet=False, meth='mean', wf_name='func_preproc'):
 
     func_mean_skullstrip = pe.Node(interface=afni_utils.TStat(),
                                    name='func_mean_skullstrip')
+    if meth in ['median', 'mean']:
+        avg_meth = '-' + meth
+        func_mean_skullstrip.inputs.options = avg_meth
+    else:
+        raise ValueError("average method unknown")
 
-    func_mean_skullstrip.inputs.options = '-mean'
     func_mean_skullstrip.inputs.outputtype = 'NIFTI_GZ'
 
     preproc.connect(func_edge_detect, 'out_file',
@@ -472,17 +476,6 @@ def create_func_preproc(use_bet=False, meth='mean', wf_name='func_preproc'):
     preproc.connect(func_mean_skullstrip, 'out_file',
                     output_node, 'example_func')
 
-    func_median_skullstrip = pe.Node(interface=afni_utils.TStat(),
-                                   name='func_median_skullstrip')
-
-    func_median_skullstrip.inputs.options = '-median'
-    func_median_skullstrip.inputs.outputtype = 'NIFTI_GZ'
-
-    preproc.connect(func_edge_detect, 'out_file',
-                    func_mean_skullstrip, 'in_file')
-
-    preproc.connect(func_mean_skullstrip, 'out_file',
-                    output_node, 'example_func_median')
 
     func_normalize = pe.Node(interface=fsl.ImageMaths(),
                              name='func_normalize')
