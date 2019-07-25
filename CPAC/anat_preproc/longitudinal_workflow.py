@@ -15,6 +15,7 @@ from CPAC.utils.datasource import (
 )
 
 from CPAC.anat_preproc.anat_preproc import create_anat_preproc
+from CPAC.anat_preproc.func_preproc import create_func_preproc
 from CPAC.anat_preproc.longitudinal_preproc import template_creation_flirt
 
 from CPAC.utils import Strategy, find_files
@@ -194,6 +195,11 @@ def init_subject_wf(sub_dict, conf):
                 shutil.rmtree(f)
 
     return c, subject_id, input_creds_path
+
+def func_template_generation(sessions, conf):
+    for ses in sessions:
+
+        create_func_preproc()
 
 
 def anat_workflow(sessions, conf, input_creds_path):
