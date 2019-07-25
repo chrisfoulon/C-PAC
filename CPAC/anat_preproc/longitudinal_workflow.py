@@ -203,6 +203,7 @@ def init_subject_wf(sub_dict, conf):
 
     return c, subject_id, input_creds_path
 
+
 def func_template_generation(sub_list, conf):
     for func in sub_list:
         """
@@ -360,7 +361,7 @@ def func_template_generation(sub_list, conf):
                     wf_name='func_preproc_automask_%d' % str(subject_id)
                 )
 
-                workflow.connect(trunc_wf, 'outputspec.edited_func',
+                workflow.connect(trunc_wf, meth, 'outputspec.edited_func',
                                  func_preproc, 'inputspec.func')
 
                 func_preproc.inputs.inputspec.twopass = \
@@ -369,19 +370,17 @@ def func_template_generation(sub_list, conf):
             if func_masking == 'BET':
                 func_preproc = create_func_preproc(use_bet=True,
                                                    meth=meth,
-                                                   wf_name='func_preproc_bet_%d' % num_strat)
+                                                   wf_name='func_preproc_bet_%d' % str(subject_id))
 
-                workflow.connect(trunc_wf, 'outputspec.edited_func',
+                workflow.connect(trunc_wf, meth, 'outputspec.edited_func',
                                  func_preproc, 'inputspec.func')
 
                 func_preproc.inputs.inputspec.twopass = \
                     getattr(conf, 'functional_volreg_twopass', True)
 
-            func_preproc,
-            'outputspec.preprocessed'
+            func_preproc, 'outputspec.preprocessed'
 
-
-        create_func_preproc()
+            print("DOOOOOONE")
 
 
 def anat_workflow(sessions, conf, input_creds_path):
@@ -418,19 +417,19 @@ def anat_workflow(sessions, conf, input_creds_path):
                 brain_flow.inputs.inputnode.dl_dir = conf.workingDirectory
 
 
-        if "AFNI" in conf.skullstrip_option:
-
-        if "BET" in conf.skullstrip_option:
-
-        wf = pe.Workflow(name='anat_preproc' + unique_id)
+        # if "AFNI" in conf.skullstrip_option:
+        #
+        # if "BET" in conf.skullstrip_option:
+        #
+        # wf = pe.Workflow(name='anat_preproc' + unique_id)
         anat_datasource = create_anat_datasource('anat_gather_%d' % unique_id)
         anat_datasource.inputs.inputnode.subject = subject_id
         anat_datasource.inputs.inputnode.anat = ses['anat']
         anat_datasource.inputs.inputnode.creds_path = input_creds_path
         anat_datasource.inputs.inputnode.dl_dir = conf.workingDirectory
 
-        anat_prep = create_anat_preproc(skullstrip_meth[])
-        anat_preproc_list.append(wf)
+        # anat_prep = create_anat_preproc(skullstrip_meth[])
+        # anat_preproc_list.append(wf)
 
     template_creation_flirt([node.ouputs for node in anat_preproc_list])
 
