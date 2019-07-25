@@ -88,7 +88,8 @@ def create_EPI_DistCorr(use_BET,wf_name = 'epi_distcorr'):
     outputNode = pe.Node(util.IdentityInterface(fields=['fieldmap',
                                                         'fmap_despiked',
                                                         'fmapmagbrain',
-                                                        'fieldmapmask']),
+                                                        'fieldmapmask',
+                                                        'unwarped_file']),
                          name='outputspec')
     
     # Skull-strip
@@ -160,11 +161,13 @@ def create_EPI_DistCorr(use_BET,wf_name = 'epi_distcorr'):
     fugue1 = pe.Node(interface=fsl.FUGUE(), name='fugue1')
     fugue1.inputs.save_fmap = True
     fugue1.outputs.fmap_out_file = 'fmap_rads'
+    fugue1.outputs.unwarped_file = 'unwarped_file'
     preproc.connect(fslmath_mask,'out_file', fugue1, 'mask_file')
     preproc.connect(inputNode_dwellT, 'dwellT', fugue1, 'dwell_time')
     preproc.connect(inputNode_dwell_asym_ratio, 'dwell_asym_ratio',
                     fugue1, 'dwell_to_asym_ratio')
     preproc.connect(prepare, 'out_fieldmap', fugue1, 'fmap_in_file')
     preproc.connect(fugue1, 'fmap_out_file', outputNode, 'fmap_despiked')
+    preproc.connect(fugue1, 'unwarped_file', outputNode, 'unwarped_file')
 
     return preproc
