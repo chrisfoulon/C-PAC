@@ -7,8 +7,6 @@ from nipype.interfaces import ants
 from nipype.interfaces import fsl
 import nipype.pipeline.engine as pe
 import nipype.interfaces.utility as util
-# from nipype.interfaces.ants import DenoiseImage
-# from nipype.interfaces.ants import N4BiasFieldCorrection
 
 from CPAC.anat_preproc.utils import create_3dskullstrip_arg_string
 
@@ -126,6 +124,20 @@ def create_anat_preproc(method='afni', already_skullstripped=False,
             name='anat_n4')
         preproc.connect(anat_deoblique, 'out_file', n4, 'input_image')
 
+    if non_local_means_filtering and n4_correction:
+        denoise = pe.Node(interface = ants.DenoiseImage(), name = 'anat_denoise')
+        preproc.connect(anat_deoblique, 'out_file', denoise, 'input_image')
+        n4 = pe.Node(interface = ants.N4BiasFieldCorrection(dimension=3, shrink_factor=2, copy_header=True),
+            name='anat_n4')
+        preproc.connect(denoise, 'output_image', n4, 'input_image')
+    elif non_local_means_filtering and not n4_correction:
+        denoise = pe.Node(interface = ants.DenoiseImage(), name = 'anat_denoise')
+        preproc.connect(anat_deoblique, 'out_file', denoise, 'input_image')
+    elif not non_local_means_filtering and n4_correction:
+        n4 = pe.Node(interface = ants.N4BiasFieldCorrection(dimension=3, shrink_factor=2, copy_header=True),
+            name='anat_n4')
+        preproc.connect(anat_deoblique, 'out_file', n4, 'input_image')
+
     # Anatomical reorientation
     anat_reorient = pe.Node(interface=afni.Resample(),
                             name='anat_reorient')
@@ -156,6 +168,15 @@ def create_anat_preproc(method='afni', already_skullstripped=False,
     preproc.connect(anat_align_cmass, 'cm', outputnode, 'center_of_mass')
     # Just add the alignment to the output image
     preproc.connect(anat_align_cmass, 'out_file', outputnode, 'reorient')
+
+    if n4_correction:
+        preproc.connect(n4, 'output_image', anat_reorient, 'in_file')
+    elif non_local_means_filtering and not n4_correction:
+        preproc.connect(denoise, 'output_image', anat_reorient, 'in_file')
+    else:
+        preproc.connect(anat_deoblique, 'out_file', anat_reorient, 'in_file')
+
+    preproc.connect(anat_reorient, 'out_file', outputnode, 'reorient')
 
     if already_skullstripped:
 

@@ -512,7 +512,9 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
 
             if "BET" in c.skullstrip_option:
                 anat_preproc = create_anat_preproc(method='fsl',
-                                                   wf_name='anat_preproc_bet_%d' % num_strat)
+                                                   wf_name='anat_preproc_bet_%d' % num_strat,
+                                                   non_local_means_filtering=c.non_local_means_filtering,
+                                                   n4_correction=c.n4_bias_field_correction)
 
                 workflow.connect(template_center_of_mass, 'cm',
                                  anat_preproc, 'inputspec.template_cmass')

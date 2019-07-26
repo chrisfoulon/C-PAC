@@ -26,7 +26,6 @@ from CPAC.anat_preproc.longitudinal_preproc import template_creation_flirt
 from CPAC.utils import Strategy, find_files, function
 
 from CPAC.utils.utils import (
-    create_log,
     check_config_resources,
     check_system_deps,
     get_scan_params,
@@ -34,28 +33,6 @@ from CPAC.utils.utils import (
 )
 
 logger = logging.getLogger('nipype.workflow')
-
-
-def create_log_node(workflow, logged_wf, output, index, scan_id=None):
-    try:
-        log_dir = workflow.config['logging']['log_directory']
-        if logged_wf:
-            log_wf = create_log(wf_name='log_%s' % logged_wf.name)
-            log_wf.inputs.inputspec.workflow = logged_wf.name
-            log_wf.inputs.inputspec.index = index
-            log_wf.inputs.inputspec.log_dir = log_dir
-            workflow.connect(logged_wf, output, log_wf, 'inputspec.inputs')
-        else:
-            log_wf = create_log(wf_name='log_done_%s' % scan_id,
-                                scan_id=scan_id)
-            log_wf.base_dir = log_dir
-            log_wf.inputs.inputspec.workflow = 'DONE'
-            log_wf.inputs.inputspec.index = index
-            log_wf.inputs.inputspec.log_dir = log_dir
-            log_wf.inputs.inputspec.inputs = log_dir
-            return log_wf
-    except Exception as e:
-        print(e)
 
 
 def init_subject_wf(sub_dict, conf):
@@ -205,30 +182,29 @@ def init_subject_wf(sub_dict, conf):
 
 
 def func_template_generation(sub_list, conf):
-    for func in sub_list:
-        """
-        truncate
-        (Func_preproc){
-        two step motion corr 
-        refit 
-        resample
-        motion corr
-        skullstripping
-        mean + median
-        }  
-        dist corr and apply dist corr res
-        config file registration target (epi t1)
-        """
-        if 'func' in func or 'rest' in func:
-            if 'func' in sub_list:
-                func_paths_dict = sub_list['func']
-            else:
-                func_paths_dict = sub_list['rest']
+    wf_list = []
+    for sub_dict in sub_list:
+        if 'func' in sub_dict:
+            print(sub_dict['subject_id'])
+            # for run in sub_dict['func']:
+            """
+            truncate
+            (Func_preproc){
+            two step motion corr 
+            refit 
+            resample
+            motion corr
+            skullstripping
+            mean + median
+            }  
+            dist corr and apply dist corr res
+            config file registration target (epi t1)
+            """
 
-            subject_id = sub_list['subject_id']
-
+            func_paths_dict = sub_dict['func']
+            subject_id = sub_dict['subject_id']
             try:
-                creds_path = sub_list['creds_path']
+                creds_path = sub_dict['creds_path']
                 if creds_path and 'none' not in creds_path.lower():
                     if os.path.exists(creds_path):
                         input_creds_path = os.path.abspath(creds_path)
@@ -243,7 +219,7 @@ def func_template_generation(sub_list, conf):
                 input_creds_path = None
 
             func_wf = create_func_datasource(func_paths_dict,
-                                             'func_gather_%d' % str(subject_id))
+                                             'func_gather_%s' % str(subject_id))
             func_wf.inputs.inputnode.set(
                 subject=subject_id,
                 creds_path=input_creds_path,
@@ -270,7 +246,7 @@ def func_template_generation(sub_list, conf):
                                                     'stop_indx'],
                                       function=get_scan_params,
                                       as_module=True),
-                    name='scan_params_%d' % str(subject_id))
+                    name='scan_params_%s' % str(subject_id))
 
             workflow_name = 'resting_preproc_' + str(subject_id)
             workflow = pe.Workflow(name=workflow_name)
@@ -282,7 +258,7 @@ def func_template_generation(sub_list, conf):
 
             if "Selected Functional Volume" in conf.func_reg_input:
                 get_func_volume = pe.Node(interface=afni.Calc(),
-                                          name='get_func_volume_%d' % str(
+                                          name='get_func_volume_%s' % str(
                                               subject_id))
 
                 get_func_volume.inputs.set(
@@ -316,7 +292,7 @@ def func_template_generation(sub_list, conf):
                                                    output_names=['tr'],
                                                    function=get_tr,
                                                    as_module=True),
-                                 name='convert_tr_%d' % str(subject_id))
+                                 name='convert_tr_%s' % str(subject_id))
 
             # strat.update_resource_pool({
             #     'raw_functional': (func_wf, 'outputspec.rest'),
@@ -324,7 +300,7 @@ def func_template_generation(sub_list, conf):
             # })
 
             trunc_wf = create_wf_edit_func(
-                wf_name="edit_func_%d" % str(subject_id)
+                wf_name="edit_func_%s" % str(subject_id)
             )
 
             # connect the functional data from the leaf node into the wf
@@ -358,7 +334,7 @@ def func_template_generation(sub_list, conf):
                 func_preproc = create_func_preproc(
                     use_bet=False,
                     meth=meth,
-                    wf_name='func_preproc_automask_%d' % str(subject_id)
+                    wf_name='func_preproc_automask_%s' % str(subject_id)
                 )
 
                 workflow.connect(trunc_wf, meth, 'outputspec.edited_func',
@@ -370,7 +346,7 @@ def func_template_generation(sub_list, conf):
             if func_masking == 'BET':
                 func_preproc = create_func_preproc(use_bet=True,
                                                    meth=meth,
-                                                   wf_name='func_preproc_bet_%d' % str(subject_id))
+                                                   wf_name='func_preproc_bet_%s' % str(subject_id))
 
                 workflow.connect(trunc_wf, meth, 'outputspec.edited_func',
                                  func_preproc, 'inputspec.func')
@@ -378,10 +354,22 @@ def func_template_generation(sub_list, conf):
                 func_preproc.inputs.inputspec.twopass = \
                     getattr(conf, 'functional_volreg_twopass', True)
 
-            func_preproc, 'outputspec.preprocessed'
+            wf_list.append(workflow)
+            # func_preproc, 'outputspec.preprocessed'
 
-            print("DOOOOOONE")
+        print("DOOOOOONE")
+        return wf_list
+'''
+from CPAC.anat_preproc.longitudinal_workflow import func_template_generation
+import yaml
+from CPAC.utils import Configuration
+c = Configuration(yaml.load(open('/home/test/bids_test/derivatives/cpac_pipeline_config_20190716204537.yml', 'r')))
+subject_list_file = '/home/test/bids_test/derivatives/cpac_data_config_20190723171903.yml'
+with open(subject_list_file, 'r') as sf:
+    sublist = yaml.load(sf)
 
+func_template_generation(sublist, c)
+'''
 
 def anat_workflow(sessions, conf, input_creds_path):
     # TODO ASH temporary code, remove
@@ -410,7 +398,7 @@ def anat_workflow(sessions, conf, input_creds_path):
             if ses['brain_mask'] and ses[
                 'brain_mask'].lower() != 'none':
                 brain_flow = create_anat_datasource(
-                    'brain_gather_%d' % unique_id)
+                    'brain_gather_%s' % unique_id)
                 brain_flow.inputs.inputnode.subject = subject_id
                 brain_flow.inputs.inputnode.anat = ses['brain_mask']
                 brain_flow.inputs.inputnode.creds_path = input_creds_path
@@ -422,7 +410,7 @@ def anat_workflow(sessions, conf, input_creds_path):
         # if "BET" in conf.skullstrip_option:
         #
         # wf = pe.Workflow(name='anat_preproc' + unique_id)
-        anat_datasource = create_anat_datasource('anat_gather_%d' % unique_id)
+        anat_datasource = create_anat_datasource('anat_gather_%s' % unique_id)
         anat_datasource.inputs.inputnode.subject = subject_id
         anat_datasource.inputs.inputnode.anat = ses['anat']
         anat_datasource.inputs.inputnode.creds_path = input_creds_path
