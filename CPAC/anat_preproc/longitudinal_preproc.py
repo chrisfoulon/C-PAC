@@ -248,41 +248,41 @@ def template_creation_flirt(img_list, output_folder,
     """
     Parameters
     ----------
-    img_list: list of str
+    img_list : list of str
         list of images paths
     output_folder: str
         path to the output folder (the folder must already exist)
-    init_reg: list of Node
+    init_reg : list of Node
         (default None so no initial registration is performed)
         the output of the function register_img_list with another reference
         Reuter et al. 2012 (NeuroImage) section "Improved template estimation"
         doi:10.1016/j.neuroimage.2012.02.084 recommend to use a ramdomly
         selected image from the input dataset
-    avg_method: str
+    avg_method : str
         function names from numpy library such as 'median', 'mean', 'std' ...
-    dof: integer (int of long)
+    dof : integer (int of long)
         number of transform degrees of freedom (FLIRT) (12 by default)
-    interp: str
+    interp : str
         ('trilinear' (default) or 'nearestneighbour' or 'sinc' or 'spline')
         final interpolation method used in reslicing
-    cost: str
+    cost : str
         ('mutualinfo' or 'corratio' (default) or 'normcorr' or 'normmi' or
          'leastsq' or 'labeldiff' or 'bbr')
         cost function
-    mat_type: str
+    mat_type : str
         'matrix'(default), 'ITK'
         The type of matrix used to represent the transformations
-    convergence_threshold: float
+    convergence_threshold : float
         (numpy.finfo(np.float64).eps (default)) threshold for the convergence
         The threshold is how different from no transformation is the
         transformation matrix.
-    thread_pool: int or multiprocessing.dummy.Pool
+    thread_pool : int or multiprocessing.dummy.Pool
         (default 2) number of threads. You can also provide a Pool so the
         node will be added to it to be run.
 
     Returns
     -------
-    template: str
+    template : str
         path to the final template
 
     """

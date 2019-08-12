@@ -380,15 +380,16 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
     # the longitudinal preproc will also output a local template specific to
     # the subject
     if 'local_template' in sub_dict.keys():
-        lesion_datasource = create_anat_datasource(
+        local_template_datasource = create_anat_datasource(
             'local_template_gather_%d' % num_strat)
-        lesion_datasource.inputs.inputnode.subject = subject_id
-        lesion_datasource.inputs.inputnode.anat = sub_dict['local_template']
-        lesion_datasource.inputs.inputnode.creds_path = input_creds_path
-        lesion_datasource.inputs.inputnode.dl_dir = c.workingDirectory
+        local_template_datasource.inputs.inputnode.subject = subject_id
+        local_template_datasource.inputs.inputnode.anat = \
+            sub_dict['local_template']
+        local_template_datasource.inputs.inputnode.creds_path = input_creds_path
+        local_template_datasource.inputs.inputnode.dl_dir = c.workingDirectory
 
         strat_initial.update_resource_pool({
-            'local_template': (lesion_datasource, 'outputspec.anat')
+            'local_template': (local_template_datasource, 'outputspec.anat')
         })
 
     template_center_of_mass = pe.Node(interface=afni.CenterMass(),
@@ -500,7 +501,7 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
                 new_strat = strat.fork()
                 node, out_file = new_strat['anatomical']
                 workflow.connect(node, out_file,
-                                anat_preproc, 'inputspec.anat')
+                                 anat_preproc, 'inputspec.anat')
                 new_strat.append_name(anat_preproc.name)
                 new_strat.set_leaf_properties(anat_preproc, 'outputspec.brain')
                 new_strat.update_resource_pool({

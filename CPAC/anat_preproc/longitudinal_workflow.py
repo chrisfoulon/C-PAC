@@ -8,6 +8,8 @@ from nipype import config
 from nipype import logging
 import nipype.pipeline.engine as pe
 import nipype.interfaces.afni as afni
+import nipype.interfaces.io as nio
+from nipype.interfaces.utility import Merge
 
 import CPAC
 from CPAC.utils.datasource import (
@@ -183,9 +185,10 @@ def init_subject_wf(sub_dict, conf):
 
 def func_template_generation(sub_list, conf):
     wf_list = []
+    datasink = pe.Node(nio.DataSink(), name='sinker')
+    datasink.inputs.base_directory = conf.workingDirectory
     for sub_dict in sub_list:
         if 'func' in sub_dict:
-            print(sub_dict['subject_id'])
             # for run in sub_dict['func']:
             """
             truncate
@@ -323,13 +326,12 @@ def func_template_generation(sub_list, conf):
             else:
                 meth = 'mean'
 
-            if (isinstance(conf.functionalMasking, list) and
-                    len(conf.functionalMasking) > 1):
+            if isinstance(conf.functionalMasking, list):
                 # For now, we just skullstrip using the first method selected
                 func_masking = conf.functionalMasking[0]
             else:
                 func_masking = conf.functionalMasking
-
+            print(str(func_masking))
             if func_masking == '3dAutoMask':
                 func_preproc = create_func_preproc(
                     use_bet=False,
@@ -337,28 +339,34 @@ def func_template_generation(sub_list, conf):
                     wf_name='func_preproc_automask_%s' % str(subject_id)
                 )
 
-                workflow.connect(trunc_wf, meth, 'outputspec.edited_func',
+                workflow.connect(trunc_wf, 'outputspec.edited_func',
                                  func_preproc, 'inputspec.func')
 
                 func_preproc.inputs.inputspec.twopass = \
                     getattr(conf, 'functional_volreg_twopass', True)
 
-            if func_masking == 'BET':
+            elif func_masking == 'BET':
                 func_preproc = create_func_preproc(use_bet=True,
                                                    meth=meth,
                                                    wf_name='func_preproc_bet_%s' % str(subject_id))
 
-                workflow.connect(trunc_wf, meth, 'outputspec.edited_func',
+                workflow.connect(trunc_wf, 'outputspec.edited_func',
                                  func_preproc, 'inputspec.func')
 
                 func_preproc.inputs.inputspec.twopass = \
                     getattr(conf, 'functional_volreg_twopass', True)
+            else:
+                raise ValueError("functional masking method unsupported: " + str(func_masking))
+
+            # workflow.connect(func_preproc, 'outputspec.preprocessed', datasink,
+            #                  'preproc_func')
 
             wf_list.append(workflow)
+
             # func_preproc, 'outputspec.preprocessed'
 
-        print("DOOOOOONE")
-        return wf_list
+    print("DOOOOOONE")
+    return wf_list
 '''
 from CPAC.anat_preproc.longitudinal_workflow import func_template_generation
 import yaml
@@ -368,10 +376,36 @@ subject_list_file = '/home/test/bids_test/derivatives/cpac_data_config_201907231
 with open(subject_list_file, 'r') as sf:
     sublist = yaml.load(sf)
 
-func_template_generation(sublist, c)
+wf_list = func_template_generation(sublist, c)
+res_lst = [w.run() for w in wf_list]
 '''
 
-def anat_workflow(sessions, conf, input_creds_path):
+
+def feed_template_gen(wf_name='template_gen_workflow'):
+    '''
+    Datagrabber or JoinNode still to be chosen
+
+    :param wf_name:
+    :return:
+    '''
+    working_dir = '/scratch/'
+
+
+def anat_workflow(sub_list, conf, input_creds_path):
+    """
+
+    Parameters
+    ----------
+    sub_list : dict of list
+        Dict of the subjects, the keys are the subject ids and each element
+        contains the list of the sessions for each subject.
+    conf
+    input_creds_path
+
+    Returns
+    -------
+
+    """
     # TODO ASH temporary code, remove
     # TODO ASH maybe scheme validation/normalization
     already_skullstripped = conf.already_skullstripped[0]
@@ -380,44 +414,136 @@ def anat_workflow(sessions, conf, input_creds_path):
     elif already_skullstripped == 3:
         already_skullstripped = 1
 
-    skullstrip_meth = {
-        'anatomical_brain_mask': 'mask',
-        'BET': 'fsl',
-        'AFNI': 'afni'
-    }
-
-
-
-    subject_id = sessions[0]['subject_id']
-
     anat_preproc_list = []
-    for ses in sessions:
+    for sub_dict in sub_list:
+        # Loop over the sessions too!
+        for session in sub_dict:
+            unique_id = session['unique_id']
+            subject_id = session['subject_id']
+            node_suffix = subject_id + unique_id
 
-        unique_id = ses['unique_id']
-        if 'brain_mask' in ses.keys():
-            if ses['brain_mask'] and ses[
-                'brain_mask'].lower() != 'none':
+            workflow_name = 'anat_longitudinal_preproc_' + node_suffix
+            workflow = pe.Workflow(name=workflow_name)
+            workflow.base_dir = conf.workingDirectory
+
+            if 'brain_mask' in session.keys() and session['brain_mask'] and \
+                    session['brain_mask'].lower() != 'none':
+
                 brain_flow = create_anat_datasource(
                     'brain_gather_%s' % unique_id)
                 brain_flow.inputs.inputnode.subject = subject_id
-                brain_flow.inputs.inputnode.anat = ses['brain_mask']
+                brain_flow.inputs.inputnode.anat = session['brain_mask']  # that!
                 brain_flow.inputs.inputnode.creds_path = input_creds_path
                 brain_flow.inputs.inputnode.dl_dir = conf.workingDirectory
 
+                skullstrip_meth = 'mask'
+                preproc_wf_name = 'anat_preproc_mask_%s' % node_suffix
 
-        # if "AFNI" in conf.skullstrip_option:
-        #
-        # if "BET" in conf.skullstrip_option:
-        #
-        # wf = pe.Workflow(name='anat_preproc' + unique_id)
-        anat_datasource = create_anat_datasource('anat_gather_%s' % unique_id)
-        anat_datasource.inputs.inputnode.subject = subject_id
-        anat_datasource.inputs.inputnode.anat = ses['anat']
-        anat_datasource.inputs.inputnode.creds_path = input_creds_path
-        anat_datasource.inputs.inputnode.dl_dir = conf.workingDirectory
+                anat_preproc = create_anat_preproc(
+                    method=skullstrip_meth,
+                    wf_name=preproc_wf_name,
+                    non_local_means_filtering=conf.non_local_means_filtering,
+                    n4_correction=conf.n4_bias_field_correction)
 
-        # anat_prep = create_anat_preproc(skullstrip_meth[])
-        # anat_preproc_list.append(wf)
+                workflow.connect(brain_flow, 'outputspec.brain_mask',
+                                 anat_preproc, 'inputspec.brain_mask')
+
+            elif already_skullstripped:
+                skullstrip_meth = None
+                preproc_wf_name = 'anat_preproc_already_%s' % node_suffix
+
+            else:
+                if "AFNI" in conf.skullstrip_option:
+                    skullstrip_meth = 'afni'
+                    preproc_wf_name = 'anat_preproc_afni_%s' % node_suffix
+
+                    anat_preproc = create_anat_preproc(
+                        method=skullstrip_meth,
+                        wf_name=preproc_wf_name,
+                        non_local_means_filtering=conf.non_local_means_filtering,
+                        n4_correction=conf.n4_bias_field_correction)
+
+                    anat_preproc.inputs.AFNI_options.set(
+                        shrink_factor=conf.skullstrip_shrink_factor,
+                        var_shrink_fac=conf.skullstrip_var_shrink_fac,
+                        shrink_fac_bot_lim=conf.skullstrip_shrink_factor_bot_lim,
+                        avoid_vent=conf.skullstrip_avoid_vent,
+                        niter=conf.skullstrip_n_iterations,
+                        pushout=conf.skullstrip_pushout,
+                        touchup=conf.skullstrip_touchup,
+                        fill_hole=conf.skullstrip_fill_hole,
+                        avoid_eyes=conf.skullstrip_avoid_eyes,
+                        use_edge=conf.skullstrip_use_edge,
+                        exp_frac=conf.skullstrip_exp_frac,
+                        smooth_final=conf.skullstrip_smooth_final,
+                        push_to_edge=conf.skullstrip_push_to_edge,
+                        use_skull=conf.skullstrip_use_skull,
+                        perc_int=conf.skullstrip_perc_int,
+                        max_inter_iter=conf.skullstrip_max_inter_iter,
+                        blur_fwhm=conf.skullstrip_blur_fwhm,
+                        fac=conf.skullstrip_fac,
+                    )
+
+                elif "BET" in conf.skullstrip_option:
+                    skullstrip_meth = 'fsl'
+                    preproc_wf_name = 'anat_preproc_fsl_%s' % node_suffix
+
+                    anat_preproc = create_anat_preproc(
+                        method=skullstrip_meth,
+                        wf_name=preproc_wf_name,
+                        non_local_means_filtering=conf.non_local_means_filtering,
+                        n4_correction=conf.n4_bias_field_correction)
+
+                    anat_preproc.inputs.BET_options.set(
+                        frac=conf.bet_frac,
+                        mask_boolean=conf.bet_mask_boolean,
+                        mesh_boolean=conf.bet_mesh_boolean,
+                        outline=conf.bet_outline,
+                        padding=conf.bet_padding,
+                        radius=conf.bet_radius,
+                        reduce_bias=conf.bet_reduce_bias,
+                        remove_eyes=conf.bet_remove_eyes,
+                        robust=conf.bet_robust,
+                        skull=conf.bet_skull,
+                        surfaces=conf.bet_surfaces,
+                        threshold=conf.bet_threshold,
+                        vertical_gradient=conf.bet_vertical_gradient,
+                    )
+
+                else:
+                    err = '\n\n[!] C-PAC says: Your skull-stripping method ' \
+                          'options setting does not include either \'AFNI\' or ' \
+                          '\'BET\'.\n\n Options you provided:\n' \
+                          'skullstrip_option: {0}\n\n'.format(
+                            str(conf.skullstrip_option))
+                    raise Exception(err)
+
+                anat_flow = create_anat_datasource(
+                    'anat_gather_%d' % node_suffix)
+                anat_flow.inputs.inputnode.subject = subject_id
+                anat_flow.inputs.inputnode.anat = sub_dict['anat']
+                anat_flow.inputs.inputnode.creds_path = input_creds_path
+                anat_flow.inputs.inputnode.dl_dir = conf.workingDirectory
+
+                workflow.connect(anat_flow, 'outputspec.anat',
+                                 anat_preproc, 'inputspec.anat')
+
+                template_center_of_mass = pe.Node(interface=afni.CenterMass(),
+                                                  name='template_cmass')
+                template_center_of_mass.inputs.cm_file = os.path.join(
+                    os.getcwd(), "template_center_of_mass.txt")
+                workflow.connect(
+                    conf.template_skull_for_anat, 'local_path',
+                    template_center_of_mass, 'in_file')
+
+                workflow.connect(template_center_of_mass, 'cm',
+                                 anat_preproc, 'template_cmass')
+
+                anat_preproc_list.append(workflow)
+
+                # new_strat.set_leaf_properties(anat_preproc, 'outputspec.brain')
+
+        merge_node = pe.Node(interface=Merge(), name="anat_longitudinal_merge")
 
     template_creation_flirt([node.ouputs for node in anat_preproc_list])
 

@@ -124,20 +124,6 @@ def create_anat_preproc(method='afni', already_skullstripped=False,
             name='anat_n4')
         preproc.connect(anat_deoblique, 'out_file', n4, 'input_image')
 
-    if non_local_means_filtering and n4_correction:
-        denoise = pe.Node(interface = ants.DenoiseImage(), name = 'anat_denoise')
-        preproc.connect(anat_deoblique, 'out_file', denoise, 'input_image')
-        n4 = pe.Node(interface = ants.N4BiasFieldCorrection(dimension=3, shrink_factor=2, copy_header=True),
-            name='anat_n4')
-        preproc.connect(denoise, 'output_image', n4, 'input_image')
-    elif non_local_means_filtering and not n4_correction:
-        denoise = pe.Node(interface = ants.DenoiseImage(), name = 'anat_denoise')
-        preproc.connect(anat_deoblique, 'out_file', denoise, 'input_image')
-    elif not non_local_means_filtering and n4_correction:
-        n4 = pe.Node(interface = ants.N4BiasFieldCorrection(dimension=3, shrink_factor=2, copy_header=True),
-            name='anat_n4')
-        preproc.connect(anat_deoblique, 'out_file', n4, 'input_image')
-
     # Anatomical reorientation
     anat_reorient = pe.Node(interface=afni.Resample(),
                             name='anat_reorient')
