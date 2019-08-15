@@ -467,6 +467,7 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
             elif already_skullstripped:
                 skullstrip_meth = None
                 preproc_wf_name = 'anat_preproc_already_%s' % node_suffix
+                # TODO
 
             else:
                 if "AFNI" in conf.skullstrip_option:
@@ -542,18 +543,19 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                 anat_flow.inputs.inputnode.dl_dir = conf.workingDirectory
 
                 anat_workflow.connect(anat_flow, 'outputspec.anat',
-                                 anat_preproc, 'inputspec.anat')
+                                      anat_preproc, 'inputspec.anat')
 
-                template_center_of_mass = pe.Node(interface=afni.CenterMass(),
-                                                  name='template_cmass')
+                template_center_of_mass = pe.Node(
+                    interface=afni.CenterMass(),
+                    name='template_cmass_%s' % node_suffix
+                )
                 template_center_of_mass.inputs.cm_file = os.path.join(
                     os.getcwd(), "template_center_of_mass.txt")
-                anat_workflow.connect(
-                    conf.template_skull_for_anat, 'local_path',
-                    template_center_of_mass, 'in_file')
+                template_center_of_mass.inputs.in_file = \
+                    conf.template_skull_for_anat
 
                 anat_workflow.connect(template_center_of_mass, 'cm',
-                                 anat_preproc, 'template_cmass')
+                                      anat_preproc, 'template_cmass')
 
                 anat_preproc_list.append(anat_workflow)
 

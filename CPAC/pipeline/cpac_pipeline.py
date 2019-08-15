@@ -395,10 +395,9 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
     template_center_of_mass = pe.Node(interface=afni.CenterMass(),
                                       name='template_cmass')
     template_center_of_mass.inputs.cm_file = os.path.join(
-        os.getcwd(), "template_center_of_mass.txt")
-    workflow.connect(
-        c.template_skull_for_anat, 'local_path',
-        template_center_of_mass, 'in_file')
+        os.getcwd(), "template_center_of_mass.txt"),
+
+    template_center_of_mass.inputs.in_file = c.template_skull_for_anat
 
     num_strat += 1
     strat_list.append(strat_initial)
