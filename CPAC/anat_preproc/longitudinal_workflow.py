@@ -462,13 +462,19 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                     n4_correction=conf.n4_bias_field_correction)
 
                 anat_workflow.connect(brain_flow, 'outputspec.brain_mask',
-                                 anat_preproc, 'inputspec.brain_mask')
+                                      anat_preproc, 'inputspec.brain_mask')
 
             elif already_skullstripped:
                 skullstrip_meth = None
                 preproc_wf_name = 'anat_preproc_already_%s' % node_suffix
                 # TODO
-
+                anat_preproc = create_anat_preproc(
+                    method=skullstrip_meth,
+                    already_skullstripped=True,
+                    wf_name=preproc_wf_name,
+                    non_local_means_filtering=conf.non_local_means_filtering,
+                    n4_correction=conf.n4_bias_field_correction
+                )
             else:
                 if "AFNI" in conf.skullstrip_option:
                     skullstrip_meth = 'afni'
@@ -535,31 +541,31 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                             str(conf.skullstrip_option))
                     raise Exception(err)
 
-                anat_flow = create_anat_datasource(
-                    'anat_gather_%s' % node_suffix)
-                anat_flow.inputs.inputnode.subject = subject_id
-                anat_flow.inputs.inputnode.anat = session['anat']
-                anat_flow.inputs.inputnode.creds_path = input_creds_path
-                anat_flow.inputs.inputnode.dl_dir = conf.workingDirectory
+            anat_flow = create_anat_datasource(
+                'anat_gather_%s' % node_suffix)
+            anat_flow.inputs.inputnode.subject = subject_id
+            anat_flow.inputs.inputnode.anat = session['anat']
+            anat_flow.inputs.inputnode.creds_path = input_creds_path
+            anat_flow.inputs.inputnode.dl_dir = conf.workingDirectory
 
-                anat_workflow.connect(anat_flow, 'outputspec.anat',
-                                      anat_preproc, 'inputspec.anat')
+            anat_workflow.connect(anat_flow, 'outputspec.anat',
+                                  anat_preproc, 'inputspec.anat')
 
-                template_center_of_mass = pe.Node(
-                    interface=afni.CenterMass(),
-                    name='template_cmass_%s' % node_suffix
-                )
-                template_center_of_mass.inputs.cm_file = os.path.join(
-                    os.getcwd(), "template_center_of_mass.txt")
-                template_center_of_mass.inputs.in_file = \
-                    conf.template_skull_for_anat
+            template_center_of_mass = pe.Node(
+                interface=afni.CenterMass(),
+                name='template_cmass_%s' % node_suffix
+            )
+            template_center_of_mass.inputs.cm_file = os.path.join(
+                os.getcwd(), "template_center_of_mass.txt")
+            template_center_of_mass.inputs.in_file = \
+                conf.template_skull_for_anat
 
-                anat_workflow.connect(template_center_of_mass, 'cm',
-                                      anat_preproc, 'template_cmass')
+            anat_workflow.connect(template_center_of_mass, 'cm',
+                                  anat_preproc, 'template_cmass')
 
-                anat_preproc_list.append(anat_workflow)
+            anat_preproc_list.append(anat_workflow)
 
-                # new_strat.set_leaf_properties(anat_preproc, 'outputspec.brain')
+            # new_strat.set_leaf_properties(anat_preproc, 'outputspec.brain')
 
         merge_node = pe.Node(interface=Merge(len(anat_preproc_list)),
                              name="anat_longitudinal_merge")
@@ -567,7 +573,7 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
         for i in range(len(anat_preproc_list)):
             workflow.connect(anat_preproc_list[i],
                              'out_file', merge_node, 'in{}'.format(i))
-
+        # TODO
         template_creation_flirt([node.ouputs for node in anat_preproc_list])
 
     return
