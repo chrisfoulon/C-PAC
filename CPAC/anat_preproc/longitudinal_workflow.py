@@ -391,16 +391,15 @@ def feed_template_gen(wf_name='template_gen_workflow'):
     working_dir = '/scratch/'
 
 
-def anat_workflow(sub_list, conf, input_creds_path):
+def anat_longitudinal_workflow(subject_id_dict, conf):
     """
 
     Parameters
     ----------
-    sub_list : dict of list
+    subject_id_dict : dict of list
         Dict of the subjects, the keys are the subject ids and each element
         contains the list of the sessions for each subject.
     conf
-    input_creds_path
 
     Returns
     -------
@@ -415,16 +414,33 @@ def anat_workflow(sub_list, conf, input_creds_path):
         already_skullstripped = 1
 
     anat_preproc_list = []
-    for sub_dict in sub_list:
-        # Loop over the sessions too!
-        for session in sub_dict:
+    # For each participant we have a list of dict (each dict is a session)
+    for subject_id, sub_list in subject_id_dict.items():
+        print(str(subject_id))
+        workflow = pe.Workflow(
+            name="participant_specific_template" + str(subject_id))
+        # Loop over the sessions to create the input for the longitudinal algo
+        for session in sub_list:
+            try:
+                creds_path = session['creds_path']
+                if creds_path and 'none' not in creds_path.lower():
+                    if os.path.exists(creds_path):
+                        input_creds_path = os.path.abspath(creds_path)
+                    else:
+                        err_msg = 'Credentials path: "%s" for subject "%s" was not ' \
+                                  'found. Check this path and try again.' % (
+                                      creds_path, subject_id)
+                        raise Exception(err_msg)
+                else:
+                    input_creds_path = None
+            except KeyError:
+                input_creds_path = None
             unique_id = session['unique_id']
-            subject_id = session['subject_id']
-            node_suffix = subject_id + unique_id
+            node_suffix = '_'.join([subject_id, unique_id])
 
-            workflow_name = 'anat_longitudinal_preproc_' + node_suffix
-            workflow = pe.Workflow(name=workflow_name)
-            workflow.base_dir = conf.workingDirectory
+            anat_workflow_name = 'anat_longitudinal_preproc_' + node_suffix
+            anat_workflow = pe.Workflow(name=anat_workflow_name)
+            anat_workflow.base_dir = conf.workingDirectory
 
             if 'brain_mask' in session.keys() and session['brain_mask'] and \
                     session['brain_mask'].lower() != 'none':
@@ -445,7 +461,7 @@ def anat_workflow(sub_list, conf, input_creds_path):
                     non_local_means_filtering=conf.non_local_means_filtering,
                     n4_correction=conf.n4_bias_field_correction)
 
-                workflow.connect(brain_flow, 'outputspec.brain_mask',
+                anat_workflow.connect(brain_flow, 'outputspec.brain_mask',
                                  anat_preproc, 'inputspec.brain_mask')
 
             elif already_skullstripped:
@@ -519,32 +535,38 @@ def anat_workflow(sub_list, conf, input_creds_path):
                     raise Exception(err)
 
                 anat_flow = create_anat_datasource(
-                    'anat_gather_%d' % node_suffix)
+                    'anat_gather_%s' % node_suffix)
                 anat_flow.inputs.inputnode.subject = subject_id
-                anat_flow.inputs.inputnode.anat = sub_dict['anat']
+                anat_flow.inputs.inputnode.anat = session['anat']
                 anat_flow.inputs.inputnode.creds_path = input_creds_path
                 anat_flow.inputs.inputnode.dl_dir = conf.workingDirectory
 
-                workflow.connect(anat_flow, 'outputspec.anat',
+                anat_workflow.connect(anat_flow, 'outputspec.anat',
                                  anat_preproc, 'inputspec.anat')
 
                 template_center_of_mass = pe.Node(interface=afni.CenterMass(),
                                                   name='template_cmass')
                 template_center_of_mass.inputs.cm_file = os.path.join(
                     os.getcwd(), "template_center_of_mass.txt")
-                workflow.connect(
+                anat_workflow.connect(
                     conf.template_skull_for_anat, 'local_path',
                     template_center_of_mass, 'in_file')
 
-                workflow.connect(template_center_of_mass, 'cm',
+                anat_workflow.connect(template_center_of_mass, 'cm',
                                  anat_preproc, 'template_cmass')
 
-                anat_preproc_list.append(workflow)
+                anat_preproc_list.append(anat_workflow)
 
                 # new_strat.set_leaf_properties(anat_preproc, 'outputspec.brain')
 
-        merge_node = pe.Node(interface=Merge(), name="anat_longitudinal_merge")
+        merge_node = pe.Node(interface=Merge(len(anat_preproc_list)),
+                             name="anat_longitudinal_merge")
 
-    template_creation_flirt([node.ouputs for node in anat_preproc_list])
+        for i in range(len(anat_preproc_list)):
+            workflow.connect(anat_preproc_list[i],
+                             'out_file', merge_node, 'in{}'.format(i))
+
+        template_creation_flirt([node.ouputs for node in anat_preproc_list])
 
     return
+

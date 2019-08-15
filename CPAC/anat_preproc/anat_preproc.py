@@ -110,19 +110,23 @@ def create_anat_preproc(method='afni', already_skullstripped=False,
     preproc.connect(inputnode, 'anat', anat_deoblique, 'in_file')
     preproc.connect(anat_deoblique, 'out_file', outputnode, 'refit')
 
-    if non_local_means_filtering and n4_correction:
-        denoise = pe.Node(interface = ants.DenoiseImage(), name = 'anat_denoise')
+    # used to insert the denoising and/or n4 bias correction nodes if selected
+    temp_node = anat_deoblique
+    output_var_name = 'out_file'
+
+    if non_local_means_filtering:
+        denoise = pe.Node(interface=ants.DenoiseImage(), name='anat_denoise')
         preproc.connect(anat_deoblique, 'out_file', denoise, 'input_image')
-        n4 = pe.Node(interface = ants.N4BiasFieldCorrection(dimension=3, shrink_factor=2, copy_header=True),
+        temp_node = denoise
+        output_var_name = 'output_image'
+    if n4_correction:
+        n4 = pe.Node(
+            interface=ants.N4BiasFieldCorrection(dimension=3, shrink_factor=2,
+                                                 copy_header=True),
             name='anat_n4')
-        preproc.connect(denoise, 'output_image', n4, 'input_image')
-    elif non_local_means_filtering and not n4_correction:
-        denoise = pe.Node(interface = ants.DenoiseImage(), name = 'anat_denoise')
-        preproc.connect(anat_deoblique, 'out_file', denoise, 'input_image')
-    elif not non_local_means_filtering and n4_correction:
-        n4 = pe.Node(interface = ants.N4BiasFieldCorrection(dimension=3, shrink_factor=2, copy_header=True),
-            name='anat_n4')
-        preproc.connect(anat_deoblique, 'out_file', n4, 'input_image')
+        preproc.connect(temp_node, output_var_name, n4, 'input_image')
+        temp_node = n4
+        output_var_name = 'output_image'
 
     # Anatomical reorientation
     anat_reorient = pe.Node(interface=afni.Resample(),
@@ -131,12 +135,7 @@ def create_anat_preproc(method='afni', already_skullstripped=False,
     anat_reorient.inputs.orientation = 'RPI'
     anat_reorient.inputs.outputtype = 'NIFTI_GZ'
 
-    if n4_correction:
-        preproc.connect(n4, 'output_image', anat_reorient, 'in_file')
-    elif non_local_means_filtering and not n4_correction:
-        preproc.connect(denoise, 'output_image', anat_reorient, 'in_file')
-    else:
-        preproc.connect(anat_deoblique, 'out_file', anat_reorient, 'in_file')
+    preproc.connect(temp_node, output_var_name, anat_reorient, 'in_file')
 
     anat_align_cmass = pe.Node(interface=afni.CenterMass(), name='cmass')
 
@@ -154,15 +153,6 @@ def create_anat_preproc(method='afni', already_skullstripped=False,
     preproc.connect(anat_align_cmass, 'cm', outputnode, 'center_of_mass')
     # Just add the alignment to the output image
     preproc.connect(anat_align_cmass, 'out_file', outputnode, 'reorient')
-
-    if n4_correction:
-        preproc.connect(n4, 'output_image', anat_reorient, 'in_file')
-    elif non_local_means_filtering and not n4_correction:
-        preproc.connect(denoise, 'output_image', anat_reorient, 'in_file')
-    else:
-        preproc.connect(anat_deoblique, 'out_file', anat_reorient, 'in_file')
-
-    preproc.connect(anat_reorient, 'out_file', outputnode, 'reorient')
 
     if already_skullstripped:
 

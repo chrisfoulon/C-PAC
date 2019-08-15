@@ -6,7 +6,7 @@ from time import strftime
 
 import yaml
 
-from CPAC.anat_preproc.longitudinal_workflow import anat_workflow
+from CPAC.anat_preproc.longitudinal_workflow import anat_longitudinal_workflow
 from CPAC.utils import Configuration
 from CPAC.utils.ga import track_run
 
@@ -249,12 +249,12 @@ def run(config_file, subject_list_file, p_name=None, plugin=None,
         with open(subject_list_file, 'r') as sf:
             sublist = yaml.load(sf)
     except:
-        print "Subject list is not in proper YAML format. Please check " \
-              "your file"
+        print("Subject list is not in proper YAML format. Please check " \
+              "your file")
         raise Exception
 
     # BEGIN LONGITUDINAL TEMPLATE PIPELINE
-    if hasattr(c, 'longitudinal') and c.longitudinal:
+    if hasattr(c, 'gen_custom_template') and c.gen_custom_template:
         subject_id_dict = {}
         for sub in sublist:
             if sub['subject_id'] in subject_id_dict:
@@ -264,8 +264,7 @@ def run(config_file, subject_list_file, p_name=None, plugin=None,
         # subject_id_dict has the subject_id as keys and a list of sessions for
         # each participant as value
         # TODO LONG_REG modify it so the functions can be called in separated nodes
-        for sessions in subject_id_dict:
-            anat_workflow(sessions, c)
+        anat_longitudinal_workflow(subject_id_dict, c)
 
     # END LONGITUDINAL TEMPLATE PIPELINE
 
@@ -281,17 +280,17 @@ def run(config_file, subject_list_file, p_name=None, plugin=None,
 
             if 'func' in sub:
                 for id in sub['func']:
-                    scan_ids.append('scan_'+ str(id))
+                    scan_ids.append('scan_' + str(id))
 
             if 'rest' in sub:
                 for id in sub['rest']:
-                    scan_ids.append('scan_'+ str(id))
+                    scan_ids.append('scan_' + str(id))
 
             sub_scan_map[s] = scan_ids
     except:
-        print "\n\n" + "ERROR: Subject list file not in proper format - " \
+        print("\n\n" + "ERROR: Subject list file not in proper format - " \
               "check if you loaded the correct file?" + "\n" + \
-              "Error name: cpac_runner_0001" + "\n\n"
+              "Error name: cpac_runner_0001" + "\n\n")
         raise Exception
 
     pipeline_timing_info = []
