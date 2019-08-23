@@ -150,14 +150,16 @@ def create_anat_preproc(method='afni', already_skullstripped=False,
                     name='patch_cmass')
     preproc.connect(inputnode, 'template_cmass', patch, 'lst')
     preproc.connect(patch, 'tuple', anat_align_cmass, 'set_cm')
-    preproc.connect(anat_align_cmass, 'cm', outputnode, 'center_of_mass')
+    preproc.connect(anat_align_cmass, 'cm',
+                    outputnode, 'center_of_mass')
     # Just add the alignment to the output image
     preproc.connect(anat_align_cmass, 'out_file', outputnode, 'reorient')
 
     if already_skullstripped:
 
-        anat_skullstrip = pe.Node(interface=util.IdentityInterface(fields=['out_file']),
-                                    name='anat_skullstrip')
+        anat_skullstrip = pe.Node(
+            interface=util.IdentityInterface(fields=['out_file']),
+            name='anat_skullstrip')
 
         preproc.connect(anat_reorient, 'out_file',
                         anat_skullstrip, 'out_file')

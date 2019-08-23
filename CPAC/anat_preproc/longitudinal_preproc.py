@@ -243,7 +243,7 @@ def template_creation_flirt(img_list, output_folder,
                             init_reg=None, avg_method='median', dof=12,
                             interp='trilinear', cost='corratio',
                             mat_type='matrix',
-                            convergence_threshold=np.finfo(np.float64).eps,
+                            convergence_threshold=-1,
                             thread_pool=2):
     """
     Parameters
@@ -286,13 +286,32 @@ def template_creation_flirt(img_list, output_folder,
         path to the final template
 
     """
+    # import os
+    # import numpy as np
+    # from multiprocessing.dummy import Pool as ThreadPool
+    #
+    # from CPAC.anat_preproc.longitudinal_preproc import (
+    #    create_temporary_template,
+    #    register_img_list,
+    #    template_convergence
+    # )
+    print(img_list)
+    print(locals())
+
     if isinstance(thread_pool, int):
         pool = ThreadPool(thread_pool)
     else:
         pool = thread_pool
 
+    if convergence_threshold == -1:
+        convergence_threshold = np.finfo(np.float64).eps
+
     if not img_list:
         print('ERROR create_temporary_template: image list is empty')
+
+    if len(img_list) == 1:
+        print("img_list contains only 1 image, no template calculated")
+        return img_list[0]
 
     if init_reg is not None:
         if isinstance(init_reg, list):
@@ -337,56 +356,44 @@ def template_creation_flirt(img_list, output_folder,
     return template
 
 
-def subject_specific_template(img_list, output_folder,
-                              init_reg=None, avg_method='median', dof=12,
-                              interp='trilinear', cost='corratio',
-                              mat_type='matrix',
-                              convergence_threshold=np.finfo(np.float64).eps,
-                              thread_pool=2, method='flirt'):
+def subject_specific_template(workflow_name='subject_specific_template',
+                              method='flirt'):
     """
 
     Parameters
     ----------
-    img_list
-    output_folder
-    init_reg
-    avg_method
-    dof
-    interp
-    cost
-    mat_type
-    convergence_threshold
-    thread_pool
+    workflow_name
     method
 
     Returns
     -------
-
-    Algorithm
-    ---------
-    Homogenize the images:
-    -deobliquing
-    -reorienting
-    -resampling to the highest resolution of the dataset
-    -aligning all the images together (setting the center of mass of the brain
-    at 0,0,0)
-    Selection of the first target to register the images:
-    -either select an image randomly (faster) or average (default median) the
-    images and use this average as target.
-
-
     """
+    imports = [
+        'import os',
+        'import numpy as np',
+        'from multiprocessing.dummy import Pool as ThreadPool',
+        'from CPAC.anat_preproc.longitudinal_preproc import ('
+        '   create_temporary_template,'
+        '   register_img_list,'
+        '   template_convergence'
+        ')'
+    ]
     if method == 'flirt':
-        template_gen_node = pe.Node(util.Function(input_names=[
-            'img_list', 'output_folder',
-            'init_reg', 'avg_method', 'dof',
-            'interp', 'cost',
-            'mat_type',
-            'convergence_threshold',
-            'thread_pool'],
-            output_names=['template'],
-            function=template_creation_flirt),
-            name='subject_specific_template')
+        template_gen_node = pe.Node(
+            util.Function(
+                input_names=[
+                    'img_list', 'output_folder',
+                    'init_reg', 'avg_method', 'dof',
+                    'interp', 'cost',
+                    'mat_type',
+                    'convergence_threshold',
+                    'thread_pool'],
+                output_names=['template'],
+                imports=imports,
+                function=template_creation_flirt
+            ),
+            name=workflow_name
+        )
     else:
         raise ValueError(str(method)
                          + 'this method has not yet been implemented')
