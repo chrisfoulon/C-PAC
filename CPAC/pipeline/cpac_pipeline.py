@@ -395,9 +395,12 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
     template_center_of_mass = pe.Node(interface=afni.CenterMass(),
                                       name='template_cmass')
     template_center_of_mass.inputs.cm_file = os.path.join(
-        os.getcwd(), "template_center_of_mass.txt"),
+        os.getcwd(), "template_center_of_mass.txt")
 
-    template_center_of_mass.inputs.in_file = c.template_skull_for_anat
+    workflow.connect(
+        c.template_skull_for_anat, 'local_path',
+        template_center_of_mass, 'in_file'
+    )
 
     num_strat += 1
     strat_list.append(strat_initial)
@@ -414,7 +417,7 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
                                                n4_correction=c.n4_bias_field_correction)
 
             workflow.connect(template_center_of_mass, 'cm',
-                             anat_preproc, 'template_cmass')
+                             anat_preproc, 'inputspec.template_cmass')
 
             new_strat = strat.fork()
             node, out_file = new_strat['anatomical']
@@ -443,7 +446,7 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
                                                n4_correction=c.n4_bias_field_correction)
 
             workflow.connect(template_center_of_mass, 'cm',
-                             anat_preproc, 'template_cmass')
+                             anat_preproc, 'inputspec.template_cmass')
 
             new_strat = strat.fork()
             node, out_file = new_strat['anatomical']

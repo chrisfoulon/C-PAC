@@ -195,6 +195,9 @@ def run(config_file, subject_list_file, p_name=None, plugin=None,
             raise IOError
         else:
             c = Configuration(yaml.load(open(config_file, 'r')))
+            y = yaml.load(open(config_file, 'r'))
+        for yy in sorted(y.keys()):
+            print(yy)
     except IOError:
         print "config file %s doesn't exist" % config_file
         raise
@@ -252,7 +255,9 @@ def run(config_file, subject_list_file, p_name=None, plugin=None,
         print("Subject list is not in proper YAML format. Please check " \
               "your file")
         raise Exception
-
+    print(c.gen_custom_template)
+    import sys
+    sys.exit()
     # BEGIN LONGITUDINAL TEMPLATE PIPELINE
     if hasattr(c, 'gen_custom_template') and c.gen_custom_template:
         subject_id_dict = {}

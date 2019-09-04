@@ -370,6 +370,14 @@ def func_template_generation(sub_list, conf):
     return wf_list
 
 
+def print_out(s):
+    print("%%%%%%%%PRINT OUTPUT OF NODE%%%%%%%%")
+    print(s)
+    print(type(s))
+    print("%%%%%%%%PRINT OUTPUT OF NODE%%%%%%%%")
+    return s
+
+
 def anat_longitudinal_workflow(subject_id_dict, conf):
     """
 
@@ -384,6 +392,8 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
     -------
 
     """
+    from nipype import config
+    config.enable_debug_mode()
     # TODO ASH temporary code, remove
     # TODO ASH maybe scheme validation/normalization
     already_skullstripped = conf.already_skullstripped[0]
@@ -396,7 +406,8 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
     for subject_id, sub_list in subject_id_dict.items():
         print(str(subject_id))
         workflow = pe.Workflow(
-            name="participant_specific_template" + str(subject_id))
+            name="participant_specific_template_" + str(subject_id))
+        workflow.base_dir = conf.workingDirectory
 
         anat_preproc_list_list = []
         # Loop over the sessions to create the input for the longitudinal algo
@@ -423,45 +434,84 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
             unique_id = session['unique_id']
             node_suffix = '_'.join([subject_id, unique_id])
 
-            anat_workflow_name = 'anat_longitudinal_preproc_' + node_suffix
-            anat_workflow = pe.Workflow(name=anat_workflow_name)
-            anat_workflow.base_dir = conf.workingDirectory
-
-            anat_flow = create_anat_datasource(
+            anat_rsc = create_anat_datasource(
                 'anat_gather_%s' % node_suffix)
-            anat_flow.inputs.inputnode.subject = subject_id
-            anat_flow.inputs.inputnode.anat = session['anat']
-            anat_flow.inputs.inputnode.creds_path = input_creds_path
-            anat_flow.inputs.inputnode.dl_dir = conf.workingDirectory
+            anat_rsc.inputs.inputnode.subject = subject_id
+            anat_rsc.inputs.inputnode.anat = session['anat']
+            anat_rsc.inputs.inputnode.creds_path = input_creds_path
+            anat_rsc.inputs.inputnode.dl_dir = conf.workingDirectory
 
             strat.update_resource_pool({
-                'anatomical': (anat_flow, 'outputspec.anat')
+                'anatomical': (anat_rsc, 'outputspec.anat')
             })
 
             template_center_of_mass = pe.Node(
                 interface=afni.CenterMass(),
                 name='template_cmass_%s' % node_suffix
             )
-            template_center_of_mass.inputs.cm_file = os.path.join(
-                os.getcwd(), "template_center_of_mass.txt")
-            template_center_of_mass.inputs.in_file = \
-                conf.template_skull_for_anat
 
-            strat.update_resource_pool({
-                'template_cmass': (template_center_of_mass, 'cm')
-            })
+            # inputnode = pe.Node(util.IdentityInterface(
+            #     fields=['anat', 'brain_mask', 'template_cmass']),
+            #     name='inputspec')
+            #
+            # outputnode = pe.Node(util.IdentityInterface(
+            #     fields=['refit',
+            #             'reorient',
+            #             'skullstrip',
+            #             'brain',
+            #             'center_of_mass']),
+            #     name='outputspec')
 
-            inputnode = pe.Node(util.IdentityInterface(
-                fields=['anat', 'brain_mask', 'template_cmass']),
-                name='inputspec')
+            def connect_anat_preproc_inputs(strat_in, anat_preproc_in):
+                new_strat_out = strat_in.fork()
 
-            outputnode = pe.Node(util.IdentityInterface(
-                fields=['refit',
-                        'reorient',
-                        'skullstrip',
-                        'brain',
-                        'center_of_mass']),
-                name='outputspec')
+                template_center_of_mass.inputs.cm_file = os.path.join(
+                    os.getcwd(), "template_center_of_mass.txt")
+
+                workflow.connect(
+                    conf.template_skull_for_anat, 'local_path',
+                    template_center_of_mass, 'in_file'
+                )
+
+                strat.update_resource_pool({
+                    'template_cmass': (template_center_of_mass, 'cm')
+                })
+
+                print_node = pe.Node(
+                    function.Function(input_names=['s'],
+                                      output_names=['out'],
+                                      function=print_out,
+                                      as_module=True),
+                    name='print_output_' + node_suffix)
+
+                node, out = strat['template_cmass']
+                workflow.connect(node, out,
+                                 print_node, 's')
+
+                # anat_workflow.connect(template_center_of_mass, 'cm',
+                #                       anat_preproc_in, 'inputspec.template_cmass')
+
+                # tmp_node, out_key = strat['template_cmass']
+                # anat_workflow.connect(template_center_of_mass, 'cm',
+                #                       anat_preproc_in, 'inputspec.template_cmass')
+
+                tmp_node, out_key = new_strat_out['anatomical']
+                workflow.connect(tmp_node, out_key, anat_preproc_in, 'inputspec.anat')
+
+                # anat_workflow.connect(print_node, 'out',
+                #                       anat_preproc_in, 'inputspec.template_cmass')
+
+                new_strat_out.append_name(anat_preproc_in.name)
+                new_strat_out.set_leaf_properties(anat_preproc_in, 'outputspec.brain')
+                new_strat_out.update_resource_pool({
+                    'anatomical_brain': (
+                        anat_preproc_in, 'outputspec.brain'),
+                    'anatomical_reorient': (
+                        anat_preproc_in, 'outputspec.reorient'),
+                })
+
+                return new_strat_out
+
             """
             Here we don't need a loop for the strategies and there will be no
             other strat before we arrive at this point. 
@@ -477,18 +527,19 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
             if 'brain_mask' in session.keys() and session['brain_mask'] and \
                     session['brain_mask'].lower() != 'none':
 
-                brain_flow = create_anat_datasource(
+                brain_rsc = create_anat_datasource(
                     'brain_gather_%s' % unique_id)
-                brain_flow.inputs.inputnode.subject = subject_id
-                brain_flow.inputs.inputnode.anat = session['brain_mask']
-                brain_flow.inputs.inputnode.creds_path = input_creds_path
-                brain_flow.inputs.inputnode.dl_dir = conf.workingDirectory
+                brain_rsc.inputs.inputnode.subject = subject_id
+                brain_rsc.inputs.inputnode.anat = session['brain_mask']
+                brain_rsc.inputs.inputnode.creds_path = input_creds_path
+                brain_rsc.inputs.inputnode.dl_dir = conf.workingDirectory
 
                 skullstrip_meth = 'mask'
                 preproc_wf_name = 'anat_preproc_mask_%s' % node_suffix
 
+                strat.append_name(brain_rsc.name)
                 strat.update_resource_pool({
-                    'anatomical_brain_mask': (brain_flow, 'outputspec.anat')
+                    'anatomical_brain_mask': (brain_rsc, 'outputspec.anat')
                 })
 
                 anat_preproc = create_anat_preproc(
@@ -497,9 +548,9 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                     non_local_means_filtering=conf.non_local_means_filtering,
                     n4_correction=conf.n4_bias_field_correction)
 
-                anat_workflow.connect(brain_flow, 'outputspec.brain_mask',
-                                      anat_preproc, 'inputspec.brain_mask')
-                new_strat = strat.fork()
+                workflow.connect(brain_rsc, 'outputspec.brain_mask',
+                                 anat_preproc, 'inputspec.brain_mask')
+                new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
                 strat_list.append(new_strat)
 
             elif already_skullstripped:
@@ -512,7 +563,7 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                     non_local_means_filtering=conf.non_local_means_filtering,
                     n4_correction=conf.n4_bias_field_correction
                 )
-                new_strat = strat.fork()
+                new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
                 strat_list.append(new_strat)
 
             else:
@@ -548,19 +599,14 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                         fac=conf.skullstrip_fac,
                     )
 
-                    new_strat = strat.fork()
-                    node, out_file = new_strat['anatomical']
-                    workflow.connect(node, out_file,
-                                     anat_preproc, 'inputspec.anat')
-                    new_strat.append_name(anat_preproc.name)
-                    new_strat.set_leaf_properties(anat_preproc,
-                                                  'outputspec.brain')
-                    new_strat.update_resource_pool({
-                        'anatomical_brain': (
-                            anat_preproc, 'outputspec.brain'),
-                        'anatomical_reorient': (
-                            anat_preproc, 'outputspec.reorient'),
-                    })
+                    new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
+                    # anat_workflow.connect(template_center_of_mass, 'cm',
+                    #                       anat_preproc, 'inputspec.template_cmass')
+
+                    node, out = strat['template_cmass']
+
+                    workflow.connect(node, out,
+                                     anat_preproc, 'inputspec.template_cmass')
 
                     strat_list.append(new_strat)
 
@@ -590,20 +636,7 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                         vertical_gradient=conf.bet_vertical_gradient,
                     )
 
-                    new_strat = strat.fork()
-                    node, out_file = new_strat['anatomical']
-                    workflow.connect(node, out_file,
-                                     anat_preproc, 'inputspec.anat')
-                    new_strat.append_name(anat_preproc.name)
-                    new_strat.set_leaf_properties(anat_preproc,
-                                                  'outputspec.brain')
-                    new_strat.update_resource_pool({
-                        'anatomical_brain': (
-                            anat_preproc, 'outputspec.brain'),
-                        'anatomical_reorient': (
-                            anat_preproc, 'outputspec.reorient'),
-                    })
-
+                    new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
                     strat_list.append(new_strat)
 
                 if not any(o in conf.skullstrip_option for o in
@@ -615,46 +648,47 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                             str(conf.skullstrip_option))
                     raise Exception(err)
 
-            # Here I have new_strat in strat_list
+            # Here I have at least new_strat in strat_list
 
             if len(anat_preproc_list_list) == 0:
                 # just initialize the list of list if it is empty
                 anat_preproc_list_list = [[] for _ in strat_list]
 
             for num_strat, loop_strat in enumerate(strat_list):
-                print('toto')
-                node, out_file = loop_strat['anatomical']
-                anat_workflow.connect(node, out_file,
-                                      anat_preproc, 'inputspec.anat')
 
-                node, out_file = loop_strat['template_cmass']
-                anat_workflow.connect(node, out_file,
-                                      anat_preproc, 'inputspec.template_cmass')
+                node, out_file = loop_strat['anatomical_brain']
 
-                anat_workflow.connect(anat_preproc, 'outputspec.brain',
-                                      outputnode, 'brain')
-
-                anat_preproc_list_list[num_strat].append(anat_workflow)
+                anat_preproc_list_list[num_strat].append(node)
 
                 # new_strat.set_leaf_properties(anat_preproc, 'outputspec.brain')
 
-                merge_node = pe.Node(
-                    interface=Merge(len(anat_preproc_list_list[num_strat])),
-                    name="anat_longitudinal_merge")
+        for anat_preproc_list in anat_preproc_list_list:
 
-                # the in{}.format take i+1 because the Merge nodes inputs starts at 1...
-                for i in range(len(anat_preproc_list_list[num_strat])):
-                    workflow.connect(anat_preproc_list_list[i],
-                                     'outputspec.brain', merge_node,
-                                     'in{}'.format(i + 1))
+            merge_node = pe.Node(
+                interface=Merge(len(anat_preproc_list)),
+                name="anat_longitudinal_merge")
 
-        template_node = subject_specific_template(
-            workflow_name='_'.join(['subject_specific_template', subject_id])
-        )
+            # the in{}.format take i+1 because the Merge nodes inputs starts at 1...
+            for i in range(len(anat_preproc_list)):
+                workflow.connect(anat_preproc_list[i],
+                                 'outputspec.brain', merge_node,
+                                 'in{}'.format(i + 1))
 
-        workflow.connect(merge_node, 'out', template_node, 'img_list')
-        template_node.inputs.output_folder = os.getcwd()
-        workflow.run()
+            template_node = subject_specific_template(
+                workflow_name='_'.join(['subject_specific_template', subject_id])
+            )
+
+            workflow.connect(merge_node, 'out', template_node, 'img_list')
+            template_node.inputs.output_folder = os.getcwd()
+            template_node.inputs.set(
+                avg_method=conf.avg_method,
+                dof=conf.dof,
+                interp=conf.interp,
+                cost=conf.cost,
+                convergence_threshold=conf.convergence_threshold,
+                thread_pool=conf.thread_pool,
+            )
+            workflow.run()
 
     return
 

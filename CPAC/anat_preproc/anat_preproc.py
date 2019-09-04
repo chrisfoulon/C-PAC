@@ -11,8 +11,24 @@ import nipype.interfaces.utility as util
 from CPAC.anat_preproc.utils import create_3dskullstrip_arg_string
 
 
-def patch_cmass_output(lst):
-    return lst[0]
+def patch_cmass_output(lst, index=0):
+    """
+
+    Parameters
+    ----------
+    lst : list of tuples
+        output of afni.CenterMass()
+    index : int
+        index in the list of tuples
+
+    Returns
+    -------
+        tuple
+            one set of center of mass coordinates
+    """
+    if len(lst) <= index:
+        raise IndexError("lst index out of range")
+    return lst[index]
 
 
 def create_anat_preproc(method='afni', already_skullstripped=False,
@@ -143,13 +159,15 @@ def create_anat_preproc(method='afni', already_skullstripped=False,
         os.getcwd(), "center_of_mass.txt")
     preproc.connect(anat_reorient, 'out_file', anat_align_cmass, 'in_file')
     # have to hardcode that because nipype CenterMass outputs a list of tuples
-    # instead of just a tuple containing the coordinates of the center of mass
+    # but the set_cm option take a tuple as input
     patch = pe.Node(util.Function(input_names=['lst'],
                     output_names=['tuple'],
                     function=patch_cmass_output),
                     name='patch_cmass')
     preproc.connect(inputnode, 'template_cmass', patch, 'lst')
     preproc.connect(patch, 'tuple', anat_align_cmass, 'set_cm')
+    # anat_align_cmass.inputs.set_cm = inputnode.inputs.template_cmass
+
     preproc.connect(anat_align_cmass, 'cm',
                     outputnode, 'center_of_mass')
     # Just add the alignment to the output image
