@@ -10,7 +10,7 @@ RUN apt-get install -y curl && \
      apt-get install -y nodejs
 RUN npm install -g bids-validator
 
-# Install Ubuntu dependencies
+# Install Ubuntu dependencies and utilities
 RUN apt-get install -y \
       build-essential \
       cmake \
@@ -45,6 +45,7 @@ RUN apt-get install -y \
       pkg-config \
       tcsh \
       unzip \
+      vim \
       xvfb \
       xauth \
       zlib1g-dev
@@ -119,7 +120,15 @@ RUN curl -sL http://fcon_1000.projects.nitrc.org/indi/cpac_resources.tar.gz -o /
     cp -nr /tmp/cpac_image_resources/tissuepriors/2mm $FSLDIR/data/standard/tissuepriors && \
     cp -nr /tmp/cpac_image_resources/tissuepriors/3mm $FSLDIR/data/standard/tissuepriors
 
+# download OASIS templates for niworkflows-ants skullstripping
+RUN mkdir /ants_template && \
+    curl -sL https://s3-eu-west-1.amazonaws.com/pfigshare-u-files/3133832/Oasis.zip -o /tmp/Oasis.zip && \
+    unzip /tmp/Oasis.zip -d /tmp &&\
+    mv /tmp/MICCAI2012-Multi-Atlas-Challenge-Data /ants_template/oasis && \
+    rm -rf /tmp/Oasis.zip /tmp/MICCAI2012-Multi-Atlas-Challenge-Data
+
 # install ANTs
+ENV PATH=/usr/lib/ants:$PATH
 RUN apt-get install -y ants
 
 # install ICA-AROMA
@@ -170,8 +179,8 @@ RUN git lfs install
 RUN mkdir /ndmg_atlases && \
     GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/neurodata/neuroparc.git /tmp/neuroparc && \
     cd /tmp/neuroparc && \
-    git lfs pull -I "atlases/label/*" && \
-    cp -r /tmp/neuroparc/atlases/label /ndmg_atlases/label && \
+    git lfs pull -I "atlases/label/Human/*" && \
+    cp -r /tmp/neuroparc/atlases/label/Human /ndmg_atlases/label/Human && \
     cd -
 
 
