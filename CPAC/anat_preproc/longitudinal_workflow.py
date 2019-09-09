@@ -460,6 +460,10 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                 'anatomical': (anat_rsc, 'outputspec.anat')
             })
 
+            strat.update_resource_pool({
+                'template_cmass': (template_center_of_mass, 'cm')
+            })
+
             # inputnode = pe.Node(util.IdentityInterface(
             #     fields=['anat', 'brain_mask', 'template_cmass']),
             #     name='inputspec')
@@ -474,38 +478,22 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
 
             def connect_anat_preproc_inputs(strat_in, anat_preproc_in):
                 new_strat_out = strat_in.fork()
-
-                # workflow.connect(
-                #     conf.template_skull_for_anat, 'local_path',
-                #     template_center_of_mass, 'in_file'
-                # )
-                strat.update_resource_pool({
-                    'template_cmass': (template_center_of_mass, 'cm')
-                })
-
-                print_node = pe.Node(
-                    function.Function(input_names=['s'],
-                                      output_names=['out'],
-                                      function=print_out,
-                                      as_module=True),
-                    name='print_output_' + node_suffix)
-
-                node, out = strat['template_cmass']
-                workflow.connect(node, out,
-                                 print_node, 's')
-
-                # anat_workflow.connect(template_center_of_mass, 'cm',
-                #                       anat_preproc_in, 'inputspec.template_cmass')
-
-                # tmp_node, out_key = strat['template_cmass']
-                # anat_workflow.connect(template_center_of_mass, 'cm',
-                #                       anat_preproc_in, 'inputspec.template_cmass')
+                # print_node = pe.Node(
+                #     function.Function(input_names=['s'],
+                #                       output_names=['out'],
+                #                       function=print_out,
+                #                       as_module=True),
+                #     name='print_output_' + node_suffix)
+                #
+                # node, out = strat['template_cmass']
+                # workflow.connect(node, out,
+                #                  print_node, 's')
 
                 tmp_node, out_key = new_strat_out['anatomical']
                 workflow.connect(tmp_node, out_key, anat_preproc_in, 'inputspec.anat')
 
-                # anat_workflow.connect(print_node, 'out',
-                #                       anat_preproc_in, 'inputspec.template_cmass')
+                workflow.connect(template_center_of_mass, 'cm',
+                                 anat_preproc_in, 'inputspec.template_cmass')
 
                 new_strat_out.append_name(anat_preproc_in.name)
                 new_strat_out.set_leaf_properties(anat_preproc_in, 'outputspec.brain')
@@ -515,7 +503,6 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                     'anatomical_reorient': (
                         anat_preproc_in, 'outputspec.reorient'),
                 })
-
                 return new_strat_out
 
             """
@@ -607,14 +594,6 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                     )
 
                     new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
-                    # anat_workflow.connect(template_center_of_mass, 'cm',
-                    #                       anat_preproc, 'inputspec.template_cmass')
-
-                    node, out = strat['template_cmass']
-
-                    workflow.connect(node, out,
-                                     anat_preproc, 'inputspec.template_cmass')
-
                     strat_list.append(new_strat)
 
                 if "BET" in conf.skullstrip_option:

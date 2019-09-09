@@ -96,7 +96,6 @@ class Strategy(object):
                   "your file")
             raise e
 
-
     @staticmethod
     def get_forking_points(strategies):
 

@@ -4148,4 +4148,4 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
             # if raising:
             #     raise raising
 
-    return workflow
+    return workflow, strat_list
