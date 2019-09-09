@@ -518,7 +518,7 @@ def check_for_s3(file_path, creds_path=None, dl_dir=None, img_type='other',
     return local_path
 
 
-def resolve_resolution(resolution, template, template_name, tag = None):
+def resolve_resolution(resolution, template, template_name, tag=None):
 
     import nipype.interfaces.afni as afni
     import nipype.pipeline.engine as pe

@@ -14,6 +14,7 @@ import nipype.interfaces.utility as util
 
 import CPAC
 from CPAC.utils.datasource import (
+    resolve_resolution,
     create_anat_datasource,
     create_func_datasource,
     create_check_for_s3_node
@@ -402,6 +403,20 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
     elif already_skullstripped == 3:
         already_skullstripped = 1
 
+    template_skull_for_anat_path = resolve_resolution(
+        conf.resolution_for_anat,
+        conf.template_skull_for_anat,
+        'template_skull_for_anat',
+        'resolution_for_anat')
+
+    template_center_of_mass = pe.Node(
+        interface=afni.CenterMass(),
+        name='template_skull_for_anat_center_of_mass'
+    )
+    template_center_of_mass.inputs.cm_file = os.path.join(
+        os.getcwd(), "template_center_of_mass.txt")
+    template_center_of_mass.inputs.in_file = template_skull_for_anat_path
+
     # For each participant we have a list of dict (each dict is a session)
     for subject_id, sub_list in subject_id_dict.items():
         print(str(subject_id))
@@ -445,11 +460,6 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                 'anatomical': (anat_rsc, 'outputspec.anat')
             })
 
-            template_center_of_mass = pe.Node(
-                interface=afni.CenterMass(),
-                name='template_cmass_%s' % node_suffix
-            )
-
             # inputnode = pe.Node(util.IdentityInterface(
             #     fields=['anat', 'brain_mask', 'template_cmass']),
             #     name='inputspec')
@@ -465,14 +475,10 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
             def connect_anat_preproc_inputs(strat_in, anat_preproc_in):
                 new_strat_out = strat_in.fork()
 
-                template_center_of_mass.inputs.cm_file = os.path.join(
-                    os.getcwd(), "template_center_of_mass.txt")
-
-                workflow.connect(
-                    conf.template_skull_for_anat, 'local_path',
-                    template_center_of_mass, 'in_file'
-                )
-
+                # workflow.connect(
+                #     conf.template_skull_for_anat, 'local_path',
+                #     template_center_of_mass, 'in_file'
+                # )
                 strat.update_resource_pool({
                     'template_cmass': (template_center_of_mass, 'cm')
                 })
@@ -597,6 +603,7 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                         max_inter_iter=conf.skullstrip_max_inter_iter,
                         blur_fwhm=conf.skullstrip_blur_fwhm,
                         fac=conf.skullstrip_fac,
+                        monkey=conf.skullstrip_monkey,
                     )
 
                     new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
@@ -681,7 +688,7 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
             workflow.connect(merge_node, 'out', template_node, 'img_list')
             template_node.inputs.output_folder = os.getcwd()
             template_node.inputs.set(
-                avg_method=conf.avg_method,
+                avg_method=conf.long_reg_avg_method,
                 dof=conf.dof,
                 interp=conf.interp,
                 cost=conf.cost,

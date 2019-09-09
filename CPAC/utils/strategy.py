@@ -1,5 +1,6 @@
 import os
 import six
+import yaml
 import warnings
 import logging
 
@@ -13,16 +14,11 @@ class Strategy(object):
         self.leaf_node = None
         self.leaf_out_file = None
         self.name = []
+        self.config_file_path = ''
 
-    def append_name(self, name):
-        self.name.append(name)
-
+    # Getters
     def get_name(self):
         return self.name
-
-    def set_leaf_properties(self, node, out_file):
-        self.leaf_node = node
-        self.leaf_out_file = out_file
 
     def get_leaf_properties(self):
         return self.leaf_node, self.leaf_out_file
@@ -41,6 +37,20 @@ class Strategy(object):
         except:
             logger.error('No node for output: %s', resource_key)
             raise
+
+    # Setters
+    def set_leaf_properties(self, node, out_file):
+        self.leaf_node = node
+        self.leaf_out_file = out_file
+
+    def set_config_file(self, config_file_path):
+        if not os.path.exists(config_file_path):
+            raise ValueError(config_file_path + " file does not exist")
+        self.config_file_path = config_file_path
+
+    # Instance methods
+    def append_name(self, name):
+        self.name.append(name)
 
     def update_resource_pool(self, resources, override=False):
         for key, value in resources.items():
@@ -71,6 +81,21 @@ class Strategy(object):
         fork.leaf_out_file = str(self.leaf_out_file)
         fork.name = list(self.name)
         return fork
+
+    def update_data_config(self, rsc, config_file_path=''):
+        if self.config_file_path == '' and config_file_path == '':
+            raise ValueError("config_file_path is empty, impossible to write the resource")
+        if config_file_path != '':
+            self.set_config_file(config_file_path)
+
+        try:
+            with open(config_file_path, 'r') as sf:
+                sublist = yaml.load(sf)
+        except Exception as e:
+            print("Subject list is not in proper YAML format. Please check "
+                  "your file")
+            raise e
+
 
     @staticmethod
     def get_forking_points(strategies):

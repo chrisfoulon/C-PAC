@@ -178,7 +178,7 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
     import time
 
     from CPAC.pipeline.cpac_pipeline import prep_workflow
-
+    print(config_file)
     if not config_file:
         import pkg_resources as p
         config_file = \
@@ -214,9 +214,7 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
             raise IOError
         else:
             c = Configuration(yaml.load(open(config_file, 'r')))
-            y = yaml.load(open(config_file, 'r'))
-        for yy in sorted(y.keys()):
-            print(yy)
+        print(config_file)
     except IOError:
         print "config file %s doesn't exist" % config_file
         raise
@@ -275,9 +273,7 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
         print("Subject list is not in proper YAML format. Please check " \
               "your file")
         raise Exception
-    print(c.gen_custom_template)
-    import sys
-    sys.exit()
+
     # BEGIN LONGITUDINAL TEMPLATE PIPELINE
     if hasattr(c, 'gen_custom_template') and c.gen_custom_template:
         subject_id_dict = {}
@@ -290,6 +286,8 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
         # each participant as value
         # TODO LONG_REG modify it so the functions can be called in separated nodes
         anat_longitudinal_workflow(subject_id_dict, c)
+        import sys
+        sys.exit()
 
     # END LONGITUDINAL TEMPLATE PIPELINE
 
