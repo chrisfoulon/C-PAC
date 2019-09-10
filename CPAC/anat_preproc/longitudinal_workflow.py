@@ -464,18 +464,6 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                 'template_cmass': (template_center_of_mass, 'cm')
             })
 
-            # inputnode = pe.Node(util.IdentityInterface(
-            #     fields=['anat', 'brain_mask', 'template_cmass']),
-            #     name='inputspec')
-            #
-            # outputnode = pe.Node(util.IdentityInterface(
-            #     fields=['refit',
-            #             'reorient',
-            #             'skullstrip',
-            #             'brain',
-            #             'center_of_mass']),
-            #     name='outputspec')
-
             def connect_anat_preproc_inputs(strat_in, anat_preproc_in):
                 new_strat_out = strat_in.fork()
                 # print_node = pe.Node(
@@ -634,7 +622,7 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                             str(conf.skullstrip_option))
                     raise Exception(err)
 
-            # Here I have at least new_strat in strat_list
+            # Here we have at least new_strat in strat_list
 
             if len(anat_preproc_list_list) == 0:
                 # just initialize the list of list if it is empty
@@ -645,8 +633,6 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                 node, out_file = loop_strat['anatomical_brain']
 
                 anat_preproc_list_list[num_strat].append(node)
-
-                # new_strat.set_leaf_properties(anat_preproc, 'outputspec.brain')
 
         for anat_preproc_list in anat_preproc_list_list:
 
