@@ -357,6 +357,23 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
     # The list of strategies that will be shared all along the pipeline creation
     strat_list = []
 
+    if sub_dict['resource_pool']:
+        for strat_name, resource_pool in sub_dict['resource_pool'].items():
+            strat = strat_initial.fork()
+            strat.append_name(strat_name)
+
+            # TODO transform paths into nodes
+            for key_type, key in resource_pool.items():
+                node = create_check_for_s3_node(
+                    key,
+                    getattr(c, key), key_type,
+                    input_creds_path, c.workingDirectory
+                )
+
+                setattr(c, key, node)
+            strat.update_resource_pool(resource_pool)
+            strat_list += [strat]
+
     num_strat = 0
 
     anat_flow = create_anat_datasource('anat_gather_%d' % num_strat)

@@ -10,7 +10,10 @@ import nipype.pipeline.engine as pe
 import nipype.interfaces.afni as afni
 import nipype.interfaces.io as nio
 from nipype.interfaces.utility import Merge
-import nipype.interfaces.utility as util
+
+from indi_aws import aws_utils
+
+from CPAC.utils.interfaces.datasink import DataSink
 
 import CPAC
 from CPAC.utils.datasource import (
@@ -371,28 +374,54 @@ def func_template_generation(sub_list, conf):
     return wf_list
 
 
-def print_out(s):
-    print("%%%%%%%%PRINT OUTPUT OF NODE%%%%%%%%")
-    print(s)
-    print(type(s))
-    print("%%%%%%%%PRINT OUTPUT OF NODE%%%%%%%%")
-    return s
+def create_datasink(datasink_name, conf, creds_path, subject_id, strat_name=''):
+    try:
+        encrypt_data = bool(conf.s3Encryption[0])
+    except:
+        encrypt_data = False
+
+    # TODO enforce value with schema validation
+    # Extract credentials path for output if it exists
+    try:
+        # Get path to creds file
+        creds_path = ''
+        if conf.awsOutputBucketCredentials:
+            creds_path = str(conf.awsOutputBucketCredentials)
+            creds_path = os.path.abspath(creds_path)
+
+        if conf.outputDirectory.lower().startswith('s3://'):
+            # Test for s3 write access
+            s3_write_access = \
+                aws_utils.test_bucket_access(creds_path,
+                                             conf.outputDirectory)
+
+            if not s3_write_access:
+                raise Exception('Not able to write to bucket!')
+
+    except Exception as e:
+        if conf.outputDirectory.lower().startswith('s3://'):
+            err_msg = 'There was an error processing credentials or ' \
+                      'accessing the S3 bucket. Check and try again.\n' \
+                      'Error: %s' % e
+            raise Exception(err_msg)
+
+    ds = pe.Node(
+        DataSink(),
+        name='sinker_{}'.format(datasink_name)
+    )
+    ds.inputs.base_directory = conf.outputDirectory
+    ds.inputs.creds_path = creds_path
+    ds.inputs.encrypt_bucket_keys = encrypt_data
+    ds.inputs.container = os.path.join(
+        'pipeline_%s_%s' % (conf.pipelineName, strat_name), subject_id
+    )
+
+    return ds
 
 
-def anat_longitudinal_workflow(subject_id_dict, conf):
-    """
-
-    Parameters
-    ----------
-    subject_id_dict : dict of list
-        Dict of the subjects, the keys are the subject ids and each element
-        contains the list of the sessions for each subject.
-    conf
-
-    Returns
-    -------
-
-    """
+def anat_longitudinal_workflow(sub_list, subject_id, conf):
+    """"""
+    # For each participant we have a list of dict (each dict is a session)
     from nipype import config
     config.enable_debug_mode()
     # TODO ASH temporary code, remove
@@ -417,111 +446,137 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
         os.getcwd(), "template_center_of_mass.txt")
     template_center_of_mass.inputs.in_file = template_skull_for_anat_path
 
-    # For each participant we have a list of dict (each dict is a session)
-    for subject_id, sub_list in subject_id_dict.items():
-        print(str(subject_id))
-        workflow = pe.Workflow(
-            name="participant_specific_template_" + str(subject_id))
-        workflow.base_dir = conf.workingDirectory
+    workflow = pe.Workflow(
+        name="participant_specific_template_" + str(subject_id))
+    workflow.base_dir = conf.workingDirectory
+    # list of lists for every strategy
+    strat_nodes_list_list = {}
+    # list of the data config dictionaries to be updated during the preprocessing
+    creds_list = []
+    # Loop over the sessions to create the input for the longitudinal algo
+    for session in sub_list:
+        unique_id = session['unique_id']
 
-        anat_preproc_list_list = []
-        # Loop over the sessions to create the input for the longitudinal algo
-        for session in sub_list:
-
-            try:
-                creds_path = session['creds_path']
-                if creds_path and 'none' not in creds_path.lower():
-                    if os.path.exists(creds_path):
-                        input_creds_path = os.path.abspath(creds_path)
-                    else:
-                        err_msg = 'Credentials path: "%s" for subject "%s" ' \
-                                  'was not found. Check this path and try ' \
-                                  'again.' % (creds_path, subject_id)
-                        raise Exception(err_msg)
+        try:
+            creds_path = session['creds_path']
+            if creds_path and 'none' not in creds_path.lower():
+                if os.path.exists(creds_path):
+                    input_creds_path = os.path.abspath(creds_path)
                 else:
-                    input_creds_path = None
-            except KeyError:
+                    err_msg = 'Credentials path: "%s" for subject "%s" session "%s" ' \
+                              'was not found. Check this path and try ' \
+                              'again.' % (creds_path, subject_id, unique_id)
+                    raise Exception(err_msg)
+            else:
                 input_creds_path = None
+        except KeyError:
+            input_creds_path = None
 
-            strat = Strategy()
-            strat_list = []
+        creds_list.append(input_creds_path)
 
-            unique_id = session['unique_id']
-            node_suffix = '_'.join([subject_id, unique_id])
+        strat = Strategy()
+        strat_list = []
+        node_suffix = '_'.join([subject_id, unique_id])
 
-            anat_rsc = create_anat_datasource(
-                'anat_gather_%s' % node_suffix)
-            anat_rsc.inputs.inputnode.subject = subject_id
-            anat_rsc.inputs.inputnode.anat = session['anat']
-            anat_rsc.inputs.inputnode.creds_path = input_creds_path
-            anat_rsc.inputs.inputnode.dl_dir = conf.workingDirectory
+        anat_rsc = create_anat_datasource(
+            'anat_gather_%s' % node_suffix)
+        anat_rsc.inputs.inputnode.subject = subject_id
+        anat_rsc.inputs.inputnode.anat = session['anat']
+        anat_rsc.inputs.inputnode.creds_path = input_creds_path
+        anat_rsc.inputs.inputnode.dl_dir = conf.workingDirectory
 
-            strat.update_resource_pool({
-                'anatomical': (anat_rsc, 'outputspec.anat')
+        strat.update_resource_pool({
+            'anatomical': (anat_rsc, 'outputspec.anat')
+        })
+
+        strat.update_resource_pool({
+            'template_cmass': (template_center_of_mass, 'cm')
+        })
+
+        def connect_anat_preproc_inputs(strat_in, anat_preproc_in, strat_name):
+            new_strat_out = strat_in.fork()
+
+            strat_nodes_list_list[strat_name] = []
+
+            tmp_node, out_key = new_strat_out['anatomical']
+            workflow.connect(tmp_node, out_key, anat_preproc_in, 'inputspec.anat')
+
+            workflow.connect(template_center_of_mass, 'cm',
+                             anat_preproc_in, 'inputspec.template_cmass')
+
+            new_strat_out.append_name(anat_preproc_in.name)
+            new_strat_out.set_leaf_properties(anat_preproc_in, 'outputspec.brain')
+            new_strat_out.update_resource_pool({
+                'anatomical_brain': (
+                    anat_preproc_in, 'outputspec.brain'),
+                'anatomical_reorient': (
+                    anat_preproc_in, 'outputspec.reorient'),
             })
 
+            # strat_nodes_list_list[strat_name].append(anat_preproc_in)
+            strat_nodes_list_list[strat_name].append(new_strat_out)
+
+            return new_strat_out
+
+        """
+        Here we don't need a loop for the strategies and there will be no
+        other strat before we arrive at this point. 
+        In cpac_pipeline, an anatomical image can either have a brain mask 
+        or be already skullstripped or have one or several of the skull
+        stripping methods. Hence, here we test:
+         1) if we have a brain mask, so 
+        the skull stripping will just use the mask to remove the skull. 
+         2) if the skullstripping has already been done, we just don't do it
+         3) else we use the skull stripping methods selected (one or several
+         in parallel) 
+        """
+        if 'brain_mask' in session.keys() and session['brain_mask'] and \
+                session['brain_mask'].lower() != 'none':
+
+            brain_rsc = create_anat_datasource(
+                'brain_gather_%s' % unique_id)
+            brain_rsc.inputs.inputnode.subject = subject_id
+            brain_rsc.inputs.inputnode.anat = session['brain_mask']
+            brain_rsc.inputs.inputnode.creds_path = input_creds_path
+            brain_rsc.inputs.inputnode.dl_dir = conf.workingDirectory
+
+            skullstrip_meth = 'mask'
+            preproc_wf_name = 'anat_preproc_mask_%s' % node_suffix
+
+            strat.append_name(brain_rsc.name)
             strat.update_resource_pool({
-                'template_cmass': (template_center_of_mass, 'cm')
+                'anatomical_brain_mask': (brain_rsc, 'outputspec.anat')
             })
 
-            def connect_anat_preproc_inputs(strat_in, anat_preproc_in):
-                new_strat_out = strat_in.fork()
-                # print_node = pe.Node(
-                #     function.Function(input_names=['s'],
-                #                       output_names=['out'],
-                #                       function=print_out,
-                #                       as_module=True),
-                #     name='print_output_' + node_suffix)
-                #
-                # node, out = strat['template_cmass']
-                # workflow.connect(node, out,
-                #                  print_node, 's')
+            anat_preproc = create_anat_preproc(
+                method=skullstrip_meth,
+                wf_name=preproc_wf_name,
+                non_local_means_filtering=conf.non_local_means_filtering,
+                n4_correction=conf.n4_bias_field_correction)
 
-                tmp_node, out_key = new_strat_out['anatomical']
-                workflow.connect(tmp_node, out_key, anat_preproc_in, 'inputspec.anat')
+            workflow.connect(brain_rsc, 'outputspec.brain_mask',
+                             anat_preproc, 'inputspec.brain_mask')
+            new_strat = connect_anat_preproc_inputs(strat, anat_preproc, skullstrip_meth)
+            strat_list.append(new_strat)
 
-                workflow.connect(template_center_of_mass, 'cm',
-                                 anat_preproc_in, 'inputspec.template_cmass')
+        elif already_skullstripped:
+            skullstrip_meth = None
+            preproc_wf_name = 'anat_preproc_already_%s' % node_suffix
+            anat_preproc = create_anat_preproc(
+                method=skullstrip_meth,
+                already_skullstripped=True,
+                wf_name=preproc_wf_name,
+                non_local_means_filtering=conf.non_local_means_filtering,
+                n4_correction=conf.n4_bias_field_correction
+            )
+            new_strat = connect_anat_preproc_inputs(strat, anat_preproc, 'already_skullstripped')
+            strat_list.append(new_strat)
 
-                new_strat_out.append_name(anat_preproc_in.name)
-                new_strat_out.set_leaf_properties(anat_preproc_in, 'outputspec.brain')
-                new_strat_out.update_resource_pool({
-                    'anatomical_brain': (
-                        anat_preproc_in, 'outputspec.brain'),
-                    'anatomical_reorient': (
-                        anat_preproc_in, 'outputspec.reorient'),
-                })
-                return new_strat_out
+        else:
 
-            """
-            Here we don't need a loop for the strategies and there will be no
-            other strat before we arrive at this point. 
-            In cpac_pipeline, an anatomical image can either have a brain mask 
-            or be already skullstripped or have one or several of the skull
-            stripping methods. Hence, here we test:
-             1) if we have a brain mask, so 
-            the skull stripping will just use the mask to remove the skull. 
-             2) if the skullstripping has already been done, we just don't do it
-             3) else we use the skull stripping methods selected (one or several
-             in parallel) 
-            """
-            if 'brain_mask' in session.keys() and session['brain_mask'] and \
-                    session['brain_mask'].lower() != 'none':
-
-                brain_rsc = create_anat_datasource(
-                    'brain_gather_%s' % unique_id)
-                brain_rsc.inputs.inputnode.subject = subject_id
-                brain_rsc.inputs.inputnode.anat = session['brain_mask']
-                brain_rsc.inputs.inputnode.creds_path = input_creds_path
-                brain_rsc.inputs.inputnode.dl_dir = conf.workingDirectory
-
-                skullstrip_meth = 'mask'
-                preproc_wf_name = 'anat_preproc_mask_%s' % node_suffix
-
-                strat.append_name(brain_rsc.name)
-                strat.update_resource_pool({
-                    'anatomical_brain_mask': (brain_rsc, 'outputspec.anat')
-                })
+            if "AFNI" in conf.skullstrip_option:
+                skullstrip_meth = 'afni'
+                preproc_wf_name = 'anat_preproc_afni_%s' % node_suffix
 
                 anat_preproc = create_anat_preproc(
                     method=skullstrip_meth,
@@ -529,138 +584,112 @@ def anat_longitudinal_workflow(subject_id_dict, conf):
                     non_local_means_filtering=conf.non_local_means_filtering,
                     n4_correction=conf.n4_bias_field_correction)
 
-                workflow.connect(brain_rsc, 'outputspec.brain_mask',
-                                 anat_preproc, 'inputspec.brain_mask')
-                new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
+                anat_preproc.inputs.AFNI_options.set(
+                    shrink_factor=conf.skullstrip_shrink_factor,
+                    var_shrink_fac=conf.skullstrip_var_shrink_fac,
+                    shrink_fac_bot_lim=conf.skullstrip_shrink_factor_bot_lim,
+                    avoid_vent=conf.skullstrip_avoid_vent,
+                    niter=conf.skullstrip_n_iterations,
+                    pushout=conf.skullstrip_pushout,
+                    touchup=conf.skullstrip_touchup,
+                    fill_hole=conf.skullstrip_fill_hole,
+                    avoid_eyes=conf.skullstrip_avoid_eyes,
+                    use_edge=conf.skullstrip_use_edge,
+                    exp_frac=conf.skullstrip_exp_frac,
+                    smooth_final=conf.skullstrip_smooth_final,
+                    push_to_edge=conf.skullstrip_push_to_edge,
+                    use_skull=conf.skullstrip_use_skull,
+                    perc_int=conf.skullstrip_perc_int,
+                    max_inter_iter=conf.skullstrip_max_inter_iter,
+                    blur_fwhm=conf.skullstrip_blur_fwhm,
+                    fac=conf.skullstrip_fac,
+                    monkey=conf.skullstrip_monkey,
+                )
+
+                new_strat = connect_anat_preproc_inputs(strat, anat_preproc, skullstrip_meth)
                 strat_list.append(new_strat)
 
-            elif already_skullstripped:
-                skullstrip_meth = None
-                preproc_wf_name = 'anat_preproc_already_%s' % node_suffix
+            if "BET" in conf.skullstrip_option:
+                skullstrip_meth = 'fsl'
+                preproc_wf_name = 'anat_preproc_fsl_%s' % node_suffix
+
                 anat_preproc = create_anat_preproc(
                     method=skullstrip_meth,
-                    already_skullstripped=True,
                     wf_name=preproc_wf_name,
                     non_local_means_filtering=conf.non_local_means_filtering,
-                    n4_correction=conf.n4_bias_field_correction
+                    n4_correction=conf.n4_bias_field_correction)
+
+                anat_preproc.inputs.BET_options.set(
+                    frac=conf.bet_frac,
+                    mask_boolean=conf.bet_mask_boolean,
+                    mesh_boolean=conf.bet_mesh_boolean,
+                    outline=conf.bet_outline,
+                    padding=conf.bet_padding,
+                    radius=conf.bet_radius,
+                    reduce_bias=conf.bet_reduce_bias,
+                    remove_eyes=conf.bet_remove_eyes,
+                    robust=conf.bet_robust,
+                    skull=conf.bet_skull,
+                    surfaces=conf.bet_surfaces,
+                    threshold=conf.bet_threshold,
+                    vertical_gradient=conf.bet_vertical_gradient,
                 )
-                new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
+
+                new_strat = connect_anat_preproc_inputs(strat, anat_preproc, skullstrip_meth)
                 strat_list.append(new_strat)
 
-            else:
+            if not any(o in conf.skullstrip_option for o in
+                       ["AFNI", "BET"]):
+                err = '\n\n[!] C-PAC says: Your skull-stripping ' \
+                      'method options setting does not include either' \
+                      ' \'AFNI\' or \'BET\'.\n\n Options you ' \
+                      'provided:\nskullstrip_option: {0}\n\n'.format(
+                        str(conf.skullstrip_option))
+                raise Exception(err)
 
-                if "AFNI" in conf.skullstrip_option:
-                    skullstrip_meth = 'afni'
-                    preproc_wf_name = 'anat_preproc_afni_%s' % node_suffix
+    update_rsc = [{} for _ in range(len(sub_list))]
+    # loop over the different skull stripping strategies
+    for strat_name, strat_nodes_list in strat_nodes_list_list.items():
+        node_suffix = '_'.join([strat_name, subject_id])
+        merge_node = pe.Node(
+            interface=Merge(len(strat_nodes_list)),
+            name="anat_longitudinal_merge_" + node_suffix)
 
-                    anat_preproc = create_anat_preproc(
-                        method=skullstrip_meth,
-                        wf_name=preproc_wf_name,
-                        non_local_means_filtering=conf.non_local_means_filtering,
-                        n4_correction=conf.n4_bias_field_correction)
+        template_node = subject_specific_template(
+            workflow_name='subject_specific_template_' + node_suffix
+        )
+        template_node.inputs.output_folder = os.getcwd()
+        template_node.inputs.set(
+            avg_method=conf.long_reg_avg_method,
+            dof=conf.dof,
+            interp=conf.interp,
+            cost=conf.cost,
+            convergence_threshold=conf.convergence_threshold,
+            thread_pool=conf.thread_pool,
+        )
 
-                    anat_preproc.inputs.AFNI_options.set(
-                        shrink_factor=conf.skullstrip_shrink_factor,
-                        var_shrink_fac=conf.skullstrip_var_shrink_fac,
-                        shrink_fac_bot_lim=conf.skullstrip_shrink_factor_bot_lim,
-                        avoid_vent=conf.skullstrip_avoid_vent,
-                        niter=conf.skullstrip_n_iterations,
-                        pushout=conf.skullstrip_pushout,
-                        touchup=conf.skullstrip_touchup,
-                        fill_hole=conf.skullstrip_fill_hole,
-                        avoid_eyes=conf.skullstrip_avoid_eyes,
-                        use_edge=conf.skullstrip_use_edge,
-                        exp_frac=conf.skullstrip_exp_frac,
-                        smooth_final=conf.skullstrip_smooth_final,
-                        push_to_edge=conf.skullstrip_push_to_edge,
-                        use_skull=conf.skullstrip_use_skull,
-                        perc_int=conf.skullstrip_perc_int,
-                        max_inter_iter=conf.skullstrip_max_inter_iter,
-                        blur_fwhm=conf.skullstrip_blur_fwhm,
-                        fac=conf.skullstrip_fac,
-                        monkey=conf.skullstrip_monkey,
-                    )
+        # the in{}.format take i+1 because the Merge nodes inputs starts at 1 ...
+        for i in range(len(strat_nodes_list)):
+            rsc_nodes_suffix = "_%s_%d" % (node_suffix, i)
+            strat_key = 'anatomical_brain'
+            anat_preproc_node, rsc_name = strat_nodes_list[i][strat_key]
+            workflow.connect(anat_preproc_node,
+                             rsc_name, merge_node,
+                             'in{}'.format(i + 1))
 
-                    new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
-                    strat_list.append(new_strat)
+            ds_brain = create_datasink(strat_key + rsc_nodes_suffix, conf, creds_list[i], subject_id, strat_name)
+            workflow.connect(anat_preproc_node, rsc_name, ds_brain, strat_key)
 
-                if "BET" in conf.skullstrip_option:
-                    skullstrip_meth = 'fsl'
-                    preproc_wf_name = 'anat_preproc_fsl_%s' % node_suffix
+            strat_key = 'anatomical_reorient'
+            anat_preproc_node, rsc_name = strat_nodes_list[i][strat_key]
+            ds_brain = create_datasink(strat_key + rsc_nodes_suffix, conf, creds_list[i], subject_id, strat_name)
+            workflow.connect(anat_preproc_node, rsc_name, ds_brain, strat_key)
 
-                    anat_preproc = create_anat_preproc(
-                        method=skullstrip_meth,
-                        wf_name=preproc_wf_name,
-                        non_local_means_filtering=conf.non_local_means_filtering,
-                        n4_correction=conf.n4_bias_field_correction)
+            strat_key = 'anat_longitudinal_template'
+            ds_template = create_datasink(strat_key + rsc_nodes_suffix, conf, creds_list[i], subject_id, strat_name)
+            workflow.connect(template_node, 'template', ds_template, strat_key)
 
-                    anat_preproc.inputs.BET_options.set(
-                        frac=conf.bet_frac,
-                        mask_boolean=conf.bet_mask_boolean,
-                        mesh_boolean=conf.bet_mesh_boolean,
-                        outline=conf.bet_outline,
-                        padding=conf.bet_padding,
-                        radius=conf.bet_radius,
-                        reduce_bias=conf.bet_reduce_bias,
-                        remove_eyes=conf.bet_remove_eyes,
-                        robust=conf.bet_robust,
-                        skull=conf.bet_skull,
-                        surfaces=conf.bet_surfaces,
-                        threshold=conf.bet_threshold,
-                        vertical_gradient=conf.bet_vertical_gradient,
-                    )
+        workflow.connect(merge_node, 'out', template_node, 'img_list')
 
-                    new_strat = connect_anat_preproc_inputs(strat, anat_preproc)
-                    strat_list.append(new_strat)
-
-                if not any(o in conf.skullstrip_option for o in
-                           ["AFNI", "BET"]):
-                    err = '\n\n[!] C-PAC says: Your skull-stripping ' \
-                          'method options setting does not include either' \
-                          ' \'AFNI\' or \'BET\'.\n\n Options you ' \
-                          'provided:\nskullstrip_option: {0}\n\n'.format(
-                            str(conf.skullstrip_option))
-                    raise Exception(err)
-
-            # Here we have at least new_strat in strat_list
-
-            if len(anat_preproc_list_list) == 0:
-                # just initialize the list of list if it is empty
-                anat_preproc_list_list = [[] for _ in strat_list]
-
-            for num_strat, loop_strat in enumerate(strat_list):
-
-                node, out_file = loop_strat['anatomical_brain']
-
-                anat_preproc_list_list[num_strat].append(node)
-
-        for anat_preproc_list in anat_preproc_list_list:
-
-            merge_node = pe.Node(
-                interface=Merge(len(anat_preproc_list)),
-                name="anat_longitudinal_merge")
-
-            # the in{}.format take i+1 because the Merge nodes inputs starts at 1...
-            for i in range(len(anat_preproc_list)):
-                workflow.connect(anat_preproc_list[i],
-                                 'outputspec.brain', merge_node,
-                                 'in{}'.format(i + 1))
-
-            template_node = subject_specific_template(
-                workflow_name='_'.join(['subject_specific_template', subject_id])
-            )
-
-            workflow.connect(merge_node, 'out', template_node, 'img_list')
-            template_node.inputs.output_folder = os.getcwd()
-            template_node.inputs.set(
-                avg_method=conf.long_reg_avg_method,
-                dof=conf.dof,
-                interp=conf.interp,
-                cost=conf.cost,
-                convergence_threshold=conf.convergence_threshold,
-                thread_pool=conf.thread_pool,
-            )
-            workflow.run()
-
+    workflow.run()
     return
-

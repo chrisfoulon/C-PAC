@@ -285,7 +285,8 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
         # subject_id_dict has the subject_id as keys and a list of sessions for
         # each participant as value
         # TODO LONG_REG modify it so the functions can be called in separated nodes
-        anat_longitudinal_workflow(subject_id_dict, c)
+        for subject_id, sub_list in subject_id_dict.items():
+            anat_longitudinal_workflow(sub_list, subject_id, c)
         import sys
         sys.exit()
 

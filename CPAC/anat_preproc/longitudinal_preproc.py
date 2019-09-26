@@ -286,17 +286,7 @@ def template_creation_flirt(img_list, output_folder,
         path to the final template
 
     """
-    # import os
-    # import numpy as np
-    # from multiprocessing.dummy import Pool as ThreadPool
-    #
-    # from CPAC.anat_preproc.longitudinal_preproc import (
-    #    create_temporary_template,
-    #    register_img_list,
-    #    template_convergence
-    # )
-    print(img_list)
-    print(locals())
+    return 'CECI_EST_UN_TEST'
 
     if isinstance(thread_pool, int):
         pool = ThreadPool(thread_pool)
