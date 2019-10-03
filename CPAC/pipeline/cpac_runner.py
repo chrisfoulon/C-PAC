@@ -1,5 +1,7 @@
 import os
+from os.path import join
 import time
+import copy
 import warnings
 from multiprocessing import Process
 from time import strftime
@@ -178,7 +180,7 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
     import time
 
     from CPAC.pipeline.cpac_pipeline import prep_workflow
-    print(config_file)
+
     if not config_file:
         import pkg_resources as p
         config_file = \
@@ -214,7 +216,6 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
             raise IOError
         else:
             c = Configuration(yaml.load(open(config_file, 'r')))
-        print(config_file)
     except IOError:
         print "config file %s doesn't exist" % config_file
         raise
@@ -284,9 +285,30 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
                 subject_id_dict[sub['subject_id']] = [sub]
         # subject_id_dict has the subject_id as keys and a list of sessions for
         # each participant as value
-        # TODO LONG_REG modify it so the functions can be called in separated nodes
         for subject_id, sub_list in subject_id_dict.items():
             anat_longitudinal_workflow(sub_list, subject_id, c)
+
+        rsc_file_list = []
+        for dirpath, dirnames, filenames in os.walk(c.outputDirectory):
+            for f in filenames:
+                # Thanks Apple, you're the best.
+                if f != '.DS_Store':
+                    rsc_file_list.append(os.path.join(dirpath, f))
+        from collections import defaultdict
+        rsc_dict = defaultdict(lambda: {})
+        for f in rsc_file_list:
+            tmp = f.split(c.outputDirectory)[-1]
+            keys = tmp.split(os.sep)
+            if keys[0] == '':
+                keys = keys[1:]
+            # it's a subject specific resource(template)
+            if len(keys) == 4:
+                rsc_dict[keys[0].split(c.pipelineName + '_')[-1]][keys[1]][keys[2]] = f
+            # it's a session specific resource
+            if len(keys) == 5:
+                rsc_dict[keys[0].split(c.pipelineName + '_')[-1]][keys[1]][keys[-1]] = f
+        print(dict(rsc_dict))
+
         import sys
         sys.exit()
 
@@ -361,7 +383,7 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
                 prep_workflow(sub, c, True, pipeline_timing_info,
                               p_name, plugin, plugin_args)
             return
-                
+
         pid = open(os.path.join(c.workingDirectory, 'pid.txt'), 'w')
 
         # Init job queue

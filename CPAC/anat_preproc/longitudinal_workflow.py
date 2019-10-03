@@ -9,11 +9,12 @@ from nipype import logging
 import nipype.pipeline.engine as pe
 import nipype.interfaces.afni as afni
 import nipype.interfaces.io as nio
-from nipype.interfaces.utility import Merge
+from nipype.interfaces.utility import Merge, IdentityInterface
 
 from indi_aws import aws_utils
 
 from CPAC.utils.interfaces.datasink import DataSink
+from CPAC.utils.interfaces.function import Function
 
 import CPAC
 from CPAC.utils.datasource import (
@@ -374,7 +375,7 @@ def func_template_generation(sub_list, conf):
     return wf_list
 
 
-def create_datasink(datasink_name, conf, creds_path, subject_id, strat_name=''):
+def create_datasink(datasink_name, conf, subject_id, session_id='', strat_name='', map_node_iterfield=None):
     try:
         encrypt_data = bool(conf.s3Encryption[0])
     except:
@@ -404,16 +405,23 @@ def create_datasink(datasink_name, conf, creds_path, subject_id, strat_name=''):
                       'accessing the S3 bucket. Check and try again.\n' \
                       'Error: %s' % e
             raise Exception(err_msg)
-
-    ds = pe.Node(
-        DataSink(),
-        name='sinker_{}'.format(datasink_name)
-    )
+    if map_node_iterfield is not None:
+        ds = pe.MapNode(
+            DataSink(infields=map_node_iterfield),
+            name='sinker_{}'.format(datasink_name),
+            iterfield=map_node_iterfield
+        )
+    else:
+        ds = pe.Node(
+            DataSink(),
+            name='sinker_{}'.format(datasink_name)
+        )
     ds.inputs.base_directory = conf.outputDirectory
     ds.inputs.creds_path = creds_path
     ds.inputs.encrypt_bucket_keys = encrypt_data
     ds.inputs.container = os.path.join(
-        'pipeline_%s_%s' % (conf.pipelineName, strat_name), subject_id
+        'pipeline_%s_%s' % (conf.pipelineName, strat_name),
+        subject_id, session_id
     )
 
     return ds
@@ -453,10 +461,12 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
     strat_nodes_list_list = {}
     # list of the data config dictionaries to be updated during the preprocessing
     creds_list = []
+
+    session_id_list = []
     # Loop over the sessions to create the input for the longitudinal algo
     for session in sub_list:
         unique_id = session['unique_id']
-
+        session_id_list.append(unique_id)
         try:
             creds_path = session['creds_path']
             if creds_path and 'none' not in creds_path.lower():
@@ -518,18 +528,6 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
 
             return new_strat_out
 
-        """
-        Here we don't need a loop for the strategies and there will be no
-        other strat before we arrive at this point. 
-        In cpac_pipeline, an anatomical image can either have a brain mask 
-        or be already skullstripped or have one or several of the skull
-        stripping methods. Hence, here we test:
-         1) if we have a brain mask, so 
-        the skull stripping will just use the mask to remove the skull. 
-         2) if the skullstripping has already been done, we just don't do it
-         3) else we use the skull stripping methods selected (one or several
-         in parallel) 
-        """
         if 'brain_mask' in session.keys() and session['brain_mask'] and \
                 session['brain_mask'].lower() != 'none':
 
@@ -556,7 +554,7 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
 
             workflow.connect(brain_rsc, 'outputspec.brain_mask',
                              anat_preproc, 'inputspec.brain_mask')
-            new_strat = connect_anat_preproc_inputs(strat, anat_preproc, skullstrip_meth)
+            new_strat = connect_anat_preproc_inputs(strat, anat_preproc, skullstrip_meth + "_skullstrip")
             strat_list.append(new_strat)
 
         elif already_skullstripped:
@@ -606,7 +604,7 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                     monkey=conf.skullstrip_monkey,
                 )
 
-                new_strat = connect_anat_preproc_inputs(strat, anat_preproc, skullstrip_meth)
+                new_strat = connect_anat_preproc_inputs(strat, anat_preproc, skullstrip_meth + "_skullstrip")
                 strat_list.append(new_strat)
 
             if "BET" in conf.skullstrip_option:
@@ -635,7 +633,7 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                     vertical_gradient=conf.bet_vertical_gradient,
                 )
 
-                new_strat = connect_anat_preproc_inputs(strat, anat_preproc, skullstrip_meth)
+                new_strat = connect_anat_preproc_inputs(strat, anat_preproc, skullstrip_meth + "_skullstrip")
                 strat_list.append(new_strat)
 
             if not any(o in conf.skullstrip_option for o in
@@ -647,7 +645,6 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                         str(conf.skullstrip_option))
                 raise Exception(err)
 
-    update_rsc = [{} for _ in range(len(sub_list))]
     # loop over the different skull stripping strategies
     for strat_name, strat_nodes_list in strat_nodes_list_list.items():
         node_suffix = '_'.join([strat_name, subject_id])
@@ -668,26 +665,33 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
             thread_pool=conf.thread_pool,
         )
 
+        rsc_key = 'anat_longitudinal_template'
+        ds_template = create_datasink(rsc_key + node_suffix, conf, subject_id, strat_name=strat_name)
+        workflow.connect(template_node, 'template', ds_template, rsc_key)
+
+        rsc_key = 'subject_to_longitudinal_template_warp'
+        ds_warp_list = create_datasink(rsc_key + node_suffix, conf, subject_id, strat_name=strat_name,
+                                       map_node_iterfield=['warp_list'])
+        workflow.connect(template_node, "final_warp_list", ds_warp_list, 'warp_list')
+
         # the in{}.format take i+1 because the Merge nodes inputs starts at 1 ...
         for i in range(len(strat_nodes_list)):
             rsc_nodes_suffix = "_%s_%d" % (node_suffix, i)
-            strat_key = 'anatomical_brain'
-            anat_preproc_node, rsc_name = strat_nodes_list[i][strat_key]
+            rsc_key = 'anatomical_brain'
+            anat_preproc_node, rsc_name = strat_nodes_list[i][rsc_key]
             workflow.connect(anat_preproc_node,
                              rsc_name, merge_node,
                              'in{}'.format(i + 1))
 
-            ds_brain = create_datasink(strat_key + rsc_nodes_suffix, conf, creds_list[i], subject_id, strat_name)
-            workflow.connect(anat_preproc_node, rsc_name, ds_brain, strat_key)
+            ds_brain = create_datasink(rsc_key + rsc_nodes_suffix, conf, subject_id,
+                                       session_id_list[i], strat_name)
+            workflow.connect(anat_preproc_node, rsc_name, ds_brain, rsc_key)
 
-            strat_key = 'anatomical_reorient'
-            anat_preproc_node, rsc_name = strat_nodes_list[i][strat_key]
-            ds_brain = create_datasink(strat_key + rsc_nodes_suffix, conf, creds_list[i], subject_id, strat_name)
-            workflow.connect(anat_preproc_node, rsc_name, ds_brain, strat_key)
-
-            strat_key = 'anat_longitudinal_template'
-            ds_template = create_datasink(strat_key + rsc_nodes_suffix, conf, creds_list[i], subject_id, strat_name)
-            workflow.connect(template_node, 'template', ds_template, strat_key)
+            rsc_key = 'anatomical_reorient'
+            anat_preproc_node, rsc_name = strat_nodes_list[i][rsc_key]
+            ds_brain = create_datasink(rsc_key + rsc_nodes_suffix, conf, subject_id,
+                                       session_id_list[i], strat_name)
+            workflow.connect(anat_preproc_node, rsc_name, ds_brain, rsc_key)
 
         workflow.connect(merge_node, 'out', template_node, 'img_list')
 

@@ -362,15 +362,14 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
             strat = strat_initial.fork()
             strat.append_name(strat_name)
 
-            # TODO transform paths into nodes
-            for key_type, key in resource_pool.items():
+            for rsc_name, rsc_path in resource_pool.items():
                 node = create_check_for_s3_node(
-                    key,
-                    getattr(c, key), key_type,
-                    input_creds_path, c.workingDirectory
+                    rsc_name,
+                    rsc_path, 'other',
+                    input_creds_path, c.outputDirectory
                 )
 
-                setattr(c, key, node)
+                setattr(c, rsc_path, node)
             strat.update_resource_pool(resource_pool)
             strat_list += [strat]
 

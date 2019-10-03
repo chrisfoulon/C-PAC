@@ -10,7 +10,7 @@ import nibabel as nib
 import nipype.pipeline.engine as pe
 import nipype.interfaces.utility as util
 import nipype.interfaces.fsl as fsl
-
+from nipype.interfaces.fsl import ConvertXFM
 
 def read_ants_mat(ants_mat_file):
     if not os.path.exists(ants_mat_file):
@@ -126,6 +126,7 @@ def template_convergence(mat_file, mat_type='matrix',
         raise ValueError("ERROR template_convergence: this matrix type does " +
                          "not exist")
     distance = norm_transformations(translation, oth_transform)
+    print(str(abs(distance)) + ' | '),
 
     return abs(distance) <= convergence_threshold
 
@@ -199,8 +200,6 @@ def register_img_list(img_list, ref_img, output_folder, dof=12,
     if not img_list:
         raise ValueError('ERROR register_img_list: image list is empty')
 
-    # output_folder = os.getcwd()
-
     output_img_list = [os.path.join(output_folder, ntpath.basename(img))
                        for img in img_list]
 
@@ -209,11 +208,11 @@ def register_img_list(img_list, ref_img, output_folder, dof=12,
                                     + '.mat')
                        for img in img_list]
 
-    def flirt_node(img, out_img, out_mat):
+    def flirt_node(in_img, output_img, output_mat):
         linear_reg = fsl.FLIRT()
-        linear_reg.inputs.in_file = img
-        linear_reg.inputs.out_file = out_img
-        linear_reg.inputs.out_matrix_file = out_mat
+        linear_reg.inputs.in_file = in_img
+        linear_reg.inputs.out_file = output_img
+        linear_reg.inputs.out_matrix_file = output_mat
 
         linear_reg.inputs.cost = cost
         linear_reg.inputs.dof = dof
@@ -253,10 +252,10 @@ def template_creation_flirt(img_list, output_folder,
     output_folder: str
         path to the output folder (the folder must already exist)
     init_reg : list of Node
-        (default None so no initial registration is performed)
+        (default None so no initial registration performed)
         the output of the function register_img_list with another reference
         Reuter et al. 2012 (NeuroImage) section "Improved template estimation"
-        doi:10.1016/j.neuroimage.2012.02.084 recommend to use a ramdomly
+        doi:10.1016/j.neuroimage.2012.02.084 uses a ramdomly
         selected image from the input dataset
     avg_method : str
         function names from numpy library such as 'median', 'mean', 'std' ...
@@ -303,16 +302,21 @@ def template_creation_flirt(img_list, output_folder,
         print("img_list contains only 1 image, no template calculated")
         return img_list[0]
 
+    final_warp_list = []
+    final_warp_list_filenames = [os.path.join(
+        output_folder, str(ntpath.basename(img).split('.')[0]) + 'anat_to_template.mat') for img in img_list]
+
     if init_reg is not None:
         if isinstance(init_reg, list):
             image_list = [node.inputs.out_file for node in init_reg]
             mat_list = [node.inputs.out_matrix_file for node in init_reg]
+            final_warp_list = mat_list
             # test if every transformation matrix has reached the convergence
             convergence_list = [template_convergence(
                 mat, mat_type, convergence_threshold) for mat in mat_list]
             converged = all(convergence_list)
         else:
-            raise
+            raise ValueError("init_reg must be a list of FLIRT nipype nodes files")
     else:
         image_list = img_list
         converged = False
@@ -330,9 +334,19 @@ def template_creation_flirt(img_list, output_folder,
                                           interp=interp,
                                           cost=cost)
 
-        image_list = [node.inputs.out_file for node in reg_list_node]
         mat_list = [node.inputs.out_matrix_file for node in reg_list_node]
-        print(str(mat_list))
+        if len(final_warp_list) == 0:
+            final_warp_list = mat_list
+        for index, mat in enumerate(mat_list):
+            concat = ConvertXFM()
+            concat.inputs.in_file = final_warp_list[index]
+            concat.inputs.invert_xfm = True
+            concat.inputs.in_file2 = mat_list[index]
+            concat.inputs.out_file = final_warp_list_filenames[index]
+            concat.run()
+            final_warp_list[index] = concat.out_file
+
+        image_list = [node.inputs.out_file for node in reg_list_node]
         # test if every transformation matrix has reached the convergence
         convergence_list = [template_convergence(
             mat, mat_type, convergence_threshold) for mat in mat_list]
@@ -343,7 +357,7 @@ def template_creation_flirt(img_list, output_folder,
         pool.join()
 
     template = tmp_template
-    return template
+    return template, final_warp_list
 
 
 def subject_specific_template(workflow_name='subject_specific_template',
@@ -362,6 +376,7 @@ def subject_specific_template(workflow_name='subject_specific_template',
         'import os',
         'import numpy as np',
         'from multiprocessing.dummy import Pool as ThreadPool',
+        'from nipype.interfaces.fsl import ConvertXFM',
         'from CPAC.anat_preproc.longitudinal_preproc import ('
         '   create_temporary_template,'
         '   register_img_list,'
@@ -378,7 +393,7 @@ def subject_specific_template(workflow_name='subject_specific_template',
                     'mat_type',
                     'convergence_threshold',
                     'thread_pool'],
-                output_names=['template'],
+                output_names=['template', 'final_warp_list'],
                 imports=imports,
                 function=template_creation_flirt
             ),
