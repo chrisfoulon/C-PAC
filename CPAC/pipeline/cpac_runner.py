@@ -310,7 +310,8 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
                 ses = ses_list[0]
                 tmp = f.split(c.outputDirectory)[-1]
                 keys = tmp.split(os.sep)
-                # print(keys)
+                print(keys)
+                print(len(keys))
                 if keys[0] == '':
                     keys = keys[1:]
                 # it's a subject specific resource(template)
@@ -332,7 +333,7 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
                         }
                     }})
                     # rsc_dict[keys[0].split(c.pipelineName + '_')[-1]][keys[1]][keys[3]] = f
-        print(sublist)
+        # print(sublist)
 
         import sys
         sys.exit()
