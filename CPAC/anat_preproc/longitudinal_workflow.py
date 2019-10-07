@@ -17,6 +17,15 @@ from CPAC.utils.interfaces.datasink import DataSink
 from CPAC.utils.interfaces.function import Function
 
 import CPAC
+
+from CPAC.registration import (
+    create_fsl_flirt_linear_reg,
+    create_fsl_fnirt_nonlinear_reg,
+    create_register_func_to_anat,
+    create_bbregister_func_to_anat,
+    create_wf_calculate_ants_warp
+)
+
 from CPAC.utils.datasource import (
     resolve_resolution,
     create_anat_datasource,
@@ -25,6 +34,7 @@ from CPAC.utils.datasource import (
 )
 
 from CPAC.anat_preproc.anat_preproc import create_anat_preproc
+from CPAC.anat_preproc.lesion_preproc import create_lesion_preproc
 from CPAC.func_preproc.func_preproc import (
     create_func_preproc,
     create_wf_edit_func
@@ -375,6 +385,602 @@ def func_template_generation(sub_list, conf):
     return wf_list
 
 
+def register_to_standard_template(sub_dict, strat_list, c, workflow):
+    already_skullstripped = c.already_skullstripped[0]
+    if already_skullstripped == 2:
+        already_skullstripped = 0
+    elif already_skullstripped == 3:
+        already_skullstripped = 1
+
+    sub_mem_gb, num_cores_per_sub, num_ants_cores = \
+        check_config_resources(c)
+
+    # either run FSL anatomical-to-MNI registration, or...
+    new_strat_list = []
+
+    # either run FSL anatomical-to-MNI registration, or...
+    if 'FSL' in c.regOption:
+        for num_strat, strat in enumerate(strat_list):
+
+            # this is to prevent the user from running FNIRT if they are
+            # providing already-skullstripped inputs. this is because
+            # FNIRT requires an input with the skull still on
+            if already_skullstripped == 1:
+                err_msg = '\n\n[!] CPAC says: FNIRT (for anatomical ' \
+                          'registration) will not work properly if you ' \
+                          'are providing inputs that have already been ' \
+                          'skull-stripped.\n\nEither switch to using ' \
+                          'ANTS for registration or provide input ' \
+                          'images that have not been already ' \
+                          'skull-stripped.\n\n'
+
+                logger.info(err_msg)
+                raise Exception
+
+            flirt_reg_anat_mni = create_fsl_flirt_linear_reg(
+                'anat_mni_flirt_register_%d' % num_strat
+            )
+
+            # if someone doesn't have anatRegFSLinterpolation in their pipe config,
+            # it will default to sinc
+            if not hasattr(c, 'anatRegFSLinterpolation'):
+                setattr(c, 'anatRegFSLinterpolation', 'sinc')
+
+            if c.anatRegFSLinterpolation not in ["trilinear", "sinc", "spline"]:
+                err_msg = 'The selected FSL interpolation method may be in the list of values: "trilinear", "sinc", "spline"'
+                raise Exception(err_msg)
+
+            # Input registration parameters
+            flirt_reg_anat_mni.inputs.inputspec.interp = c.anatRegFSLinterpolation
+
+            node, out_file = strat['anatomical_brain']
+            workflow.connect(node, out_file,
+                             flirt_reg_anat_mni, 'inputspec.input_brain')
+
+            # pass the reference files
+            node, out_file = strat['template_brain_for_anat']
+            workflow.connect(node, out_file,
+                             flirt_reg_anat_mni, 'inputspec.reference_brain')
+
+            if 'ANTS' in c.regOption:
+                strat = strat.fork()
+                new_strat_list.append(strat)
+
+            strat.append_name(flirt_reg_anat_mni.name)
+            strat.set_leaf_properties(flirt_reg_anat_mni,
+                                      'outputspec.output_brain')
+
+            strat.update_resource_pool({
+                'anatomical_to_mni_linear_xfm': (flirt_reg_anat_mni, 'outputspec.linear_xfm'),
+                'mni_to_anatomical_linear_xfm': (flirt_reg_anat_mni, 'outputspec.invlinear_xfm'),
+                'anatomical_to_standard': (flirt_reg_anat_mni, 'outputspec.output_brain')
+            })
+
+    strat_list += new_strat_list
+
+    new_strat_list = []
+
+    try:
+        fsl_linear_reg_only = c.fsl_linear_reg_only
+    except AttributeError:
+        fsl_linear_reg_only = [0]
+
+    if 'FSL' in c.regOption and 0 in fsl_linear_reg_only:
+
+        for num_strat, strat in enumerate(strat_list):
+
+            nodes = strat.get_nodes_names()
+
+            if 'anat_mni_flirt_register' in nodes:
+
+                fnirt_reg_anat_mni = create_fsl_fnirt_nonlinear_reg(
+                    'anat_mni_fnirt_register_%d' % num_strat
+                )
+
+                node, out_file = strat['anatomical_brain']
+                workflow.connect(node, out_file,
+                                 fnirt_reg_anat_mni, 'inputspec.input_brain')
+
+                # pass the reference files
+                node, out_file = strat['template_brain_for_anat']
+                workflow.connect(node, out_file,
+                                 fnirt_reg_anat_mni, 'inputspec.reference_brain')
+
+                node, out_file = strat['anatomical_reorient']
+                workflow.connect(node, out_file,
+                                 fnirt_reg_anat_mni, 'inputspec.input_skull')
+
+                node, out_file = strat['anatomical_to_mni_linear_xfm']
+                workflow.connect(node, out_file,
+                                 fnirt_reg_anat_mni, 'inputspec.linear_aff')
+
+                node, out_file = strat['template_skull_for_anat']
+                workflow.connect(node, out_file,
+                                 fnirt_reg_anat_mni, 'inputspec.reference_skull')
+
+                node, out_file = strat['template_ref_mask']
+                workflow.connect(node, out_file,
+                                 fnirt_reg_anat_mni, 'inputspec.ref_mask')
+
+                # assign the FSL FNIRT config file specified in pipeline
+                # config.yml
+                fnirt_reg_anat_mni.inputs.inputspec.fnirt_config = c.fnirtConfig
+
+                if 1 in fsl_linear_reg_only:
+                    strat = strat.fork()
+                    new_strat_list.append(strat)
+
+                strat.append_name(fnirt_reg_anat_mni.name)
+                strat.set_leaf_properties(fnirt_reg_anat_mni,
+                                          'outputspec.output_brain')
+
+                strat.update_resource_pool({
+                    'anatomical_to_mni_nonlinear_xfm': (fnirt_reg_anat_mni, 'outputspec.nonlinear_xfm'),
+                    'anatomical_to_standard': (fnirt_reg_anat_mni, 'outputspec.output_brain')
+                }, override=True)
+
+    strat_list += new_strat_list
+
+    new_strat_list = []
+
+    for num_strat, strat in enumerate(strat_list):
+
+        nodes = strat.get_nodes_names()
+
+        # or run ANTS anatomical-to-MNI registration instead
+        if 'ANTS' in c.regOption and \
+                'anat_mni_flirt_register' not in nodes and \
+                'anat_mni_fnirt_register' not in nodes:
+
+            ants_reg_anat_mni = \
+                create_wf_calculate_ants_warp(
+                    'anat_mni_ants_register_%d' % num_strat,
+                    num_threads=num_ants_cores
+                )
+
+            # if someone doesn't have anatRegANTSinterpolation in their pipe config,
+            # it will default to LanczosWindowedSinc
+            if not hasattr(c, 'anatRegANTSinterpolation'):
+                setattr(c, 'anatRegANTSinterpolation', 'LanczosWindowedSinc')
+
+            if c.anatRegANTSinterpolation not in ['Linear', 'BSpline', 'LanczosWindowedSinc']:
+                err_msg = 'The selected ANTS interpolation method may be in the list of values: "Linear", "BSpline", "LanczosWindowedSinc"'
+                raise Exception(err_msg)
+
+            # Input registration parameters
+            ants_reg_anat_mni.inputs.inputspec.interp = c.anatRegANTSinterpolation
+
+            # calculating the transform with the skullstripped is
+            # reported to be better, but it requires very high
+            # quality skullstripping. If skullstripping is imprecise
+            # registration with skull is preferred
+
+            # TODO ASH assess with schema validator
+            if 1 in c.regWithSkull:
+
+                if already_skullstripped == 1:
+                    err_msg = '\n\n[!] CPAC says: You selected ' \
+                              'to run anatomical registration with ' \
+                              'the skull, but you also selected to ' \
+                              'use already-skullstripped images as ' \
+                              'your inputs. This can be changed ' \
+                              'in your pipeline configuration ' \
+                              'editor.\n\n'
+
+                    logger.info(err_msg)
+                    raise Exception
+
+                # get the skull-stripped anatomical from resource pool
+                node, out_file = strat['anatomical_brain']
+
+                # pass the anatomical to the workflow
+                workflow.connect(node, out_file,
+                                 ants_reg_anat_mni,
+                                 'inputspec.anatomical_brain')
+
+                # pass the reference file
+                node, out_file = strat['template_brain_for_anat']
+                workflow.connect(node, out_file,
+                                 ants_reg_anat_mni, 'inputspec.reference_brain')
+
+                # get the reorient skull-on anatomical from resource pool
+                node, out_file = strat['anatomical_reorient']
+
+                # pass the anatomical to the workflow
+                workflow.connect(node, out_file,
+                                 ants_reg_anat_mni,
+                                 'inputspec.anatomical_skull')
+
+                # pass the reference file
+                node, out_file = strat['template_skull_for_anat']
+                workflow.connect(
+                    node, out_file,
+                    ants_reg_anat_mni, 'inputspec.reference_skull'
+                )
+
+            else:
+
+                node, out_file = strat['anatomical_brain']
+
+                workflow.connect(node, out_file, ants_reg_anat_mni,
+                                 'inputspec.anatomical_brain')
+
+                # pass the reference file
+                node, out_file = strat['template_brain_for_anat']
+                workflow.connect(node, out_file,
+                                 ants_reg_anat_mni, 'inputspec.reference_brain')
+
+            ants_reg_anat_mni.inputs.inputspec.set(
+                dimension=3,
+                use_histogram_matching=True,
+                winsorize_lower_quantile=0.01,
+                winsorize_upper_quantile=0.99,
+                metric=['MI', 'MI', 'CC'],
+                metric_weight=[1, 1, 1],
+                radius_or_number_of_bins=[32, 32, 4],
+                sampling_strategy=['Regular', 'Regular', None],
+                sampling_percentage=[0.25, 0.25, None],
+                number_of_iterations=[
+                    [1000, 500, 250, 100],
+                    [1000, 500, 250, 100],
+                    [100, 100, 70, 20]
+                ],
+                convergence_threshold=[1e-8, 1e-8, 1e-9],
+                convergence_window_size=[10, 10, 15],
+                transforms=['Rigid', 'Affine', 'SyN'],
+                transform_parameters=[[0.1], [0.1], [0.1, 3, 0]],
+                shrink_factors=[
+                    [8, 4, 2, 1],
+                    [8, 4, 2, 1],
+                    [6, 4, 2, 1]
+                ],
+                smoothing_sigmas=[
+                    [3, 2, 1, 0],
+                    [3, 2, 1, 0],
+                    [3, 2, 1, 0]
+                ]
+            )
+            # Test if a lesion mask is found for the anatomical image
+            if 'lesion_mask' in sub_dict and c.use_lesion_mask \
+                    and 'lesion_preproc' not in nodes:
+                # Create lesion preproc node to apply afni Refit and Resample
+                lesion_preproc = create_lesion_preproc(
+                    wf_name='lesion_preproc_%d' % num_strat
+                )
+                # Add the name of the node in the strat object
+                strat.append_name(lesion_preproc.name)
+                # I think I don't need to set this node as leaf but not sure
+                # strat.set_leaf_properties(lesion_preproc, 'inputspec.lesion')
+
+                # Add the lesion preprocessed to the resource pool
+                strat.update_resource_pool({
+                    'lesion_reorient': (lesion_preproc, 'outputspec.reorient')
+                })
+                # The Refit lesion is not added to the resource pool because
+                # it is not used afterward
+
+                # Retieve the lesion mask from the resource pool
+                node, out_file = strat['lesion_mask']
+                # Set the lesion mask as input of lesion_preproc
+                workflow.connect(
+                    node, out_file,
+                    lesion_preproc, 'inputspec.lesion'
+                )
+
+                # Set the output of lesion preproc as parameter of ANTs
+                # fixed_image_mask option
+                workflow.connect(
+                    lesion_preproc, 'outputspec.reorient',
+                    ants_reg_anat_mni, 'inputspec.fixed_image_mask'
+                )
+            else:
+                ants_reg_anat_mni.inputs.inputspec.fixed_image_mask = None
+
+            strat.append_name(ants_reg_anat_mni.name)
+
+            strat.set_leaf_properties(ants_reg_anat_mni,
+                                      'outputspec.normalized_output_brain')
+
+            strat.update_resource_pool({
+                'ants_initial_xfm': (ants_reg_anat_mni, 'outputspec.ants_initial_xfm'),
+                'ants_rigid_xfm': (ants_reg_anat_mni, 'outputspec.ants_rigid_xfm'),
+                'ants_affine_xfm': (ants_reg_anat_mni, 'outputspec.ants_affine_xfm'),
+                'anatomical_to_mni_nonlinear_xfm': (ants_reg_anat_mni, 'outputspec.warp_field'),
+                'mni_to_anatomical_nonlinear_xfm': (ants_reg_anat_mni, 'outputspec.inverse_warp_field'),
+                'anat_to_mni_ants_composite_xfm': (ants_reg_anat_mni, 'outputspec.composite_transform'),
+                'anatomical_to_standard': (ants_reg_anat_mni, 'outputspec.normalized_output_brain')
+            })
+
+    strat_list += new_strat_list
+
+    # [SYMMETRIC] T1 -> Symmetric Template, Non-linear registration (FNIRT/ANTS)
+
+    new_strat_list = []
+
+    if 1 in c.runVMHC and 1 in getattr(c, 'runFunctional', [1]):
+
+        for num_strat, strat in enumerate(strat_list):
+
+            nodes = strat.get_nodes_names()
+
+            if 'FSL' in c.regOption and \
+                    'anat_mni_ants_register' not in nodes:
+
+                # this is to prevent the user from running FNIRT if they are
+                # providing already-skullstripped inputs. this is because
+                # FNIRT requires an input with the skull still on
+                # TODO ASH normalize w schema validation to bool
+                if already_skullstripped == 1:
+                    err_msg = '\n\n[!] CPAC says: FNIRT (for anatomical ' \
+                              'registration) will not work properly if you ' \
+                              'are providing inputs that have already been ' \
+                              'skull-stripped.\n\nEither switch to using ' \
+                              'ANTS for registration or provide input ' \
+                              'images that have not been already ' \
+                              'skull-stripped.\n\n'
+
+                    logger.info(err_msg)
+                    raise Exception
+
+                flirt_reg_anat_symm_mni = create_fsl_flirt_linear_reg(
+                    'anat_symmetric_mni_flirt_register_%d' % num_strat
+                )
+
+                # Input registration parameters
+                flirt_reg_anat_symm_mni.inputs.inputspec.interp = c.anatRegFSLinterpolation
+
+                node, out_file = strat['anatomical_brain']
+                workflow.connect(node, out_file,
+                                 flirt_reg_anat_symm_mni,
+                                 'inputspec.input_brain')
+
+                # pass the reference files
+                node, out_file = strat['template_symmetric_brain']
+                workflow.connect(node, out_file,
+                                 flirt_reg_anat_symm_mni, 'inputspec.reference_brain')
+
+                # if 'ANTS' in c.regOption:
+                #    strat = strat.fork()
+                #    new_strat_list.append(strat)
+
+                strat.append_name(flirt_reg_anat_symm_mni.name)
+                strat.set_leaf_properties(flirt_reg_anat_symm_mni,
+                                          'outputspec.output_brain')
+
+                strat.update_resource_pool({
+                    'anatomical_to_symmetric_mni_linear_xfm': (
+                        flirt_reg_anat_symm_mni, 'outputspec.linear_xfm'),
+                    'symmetric_mni_to_anatomical_linear_xfm': (
+                        flirt_reg_anat_symm_mni, 'outputspec.invlinear_xfm'),
+                    'symmetric_anatomical_to_standard': (
+                        flirt_reg_anat_symm_mni, 'outputspec.output_brain')
+                })
+
+        strat_list += new_strat_list
+
+        new_strat_list = []
+
+        try:
+            fsl_linear_reg_only = c.fsl_linear_reg_only
+        except AttributeError:
+            fsl_linear_reg_only = [0]
+
+        if 'FSL' in c.regOption and 0 in fsl_linear_reg_only:
+
+            for num_strat, strat in enumerate(strat_list):
+
+                nodes = strat.get_nodes_names()
+
+                if 'anat_mni_flirt_register' in nodes:
+                    fnirt_reg_anat_symm_mni = create_fsl_fnirt_nonlinear_reg(
+                        'anat_symmetric_mni_fnirt_register_%d' % num_strat
+                    )
+
+                    node, out_file = strat['anatomical_brain']
+                    workflow.connect(node, out_file,
+                                     fnirt_reg_anat_symm_mni,
+                                     'inputspec.input_brain')
+
+                    # pass the reference files
+                    node, out_file = strat['template_brain_for_anat']
+                    workflow.connect(node, out_file,
+                                     fnirt_reg_anat_symm_mni, 'inputspec.reference_brain')
+
+                    node, out_file = strat['anatomical_reorient']
+                    workflow.connect(node, out_file,
+                                     fnirt_reg_anat_symm_mni,
+                                     'inputspec.input_skull')
+
+                    node, out_file = strat['anatomical_to_mni_linear_xfm']
+                    workflow.connect(node, out_file,
+                                     fnirt_reg_anat_symm_mni,
+                                     'inputspec.linear_aff')
+
+                    node, out_file = strat['template_symmetric_skull']
+                    workflow.connect(node, out_file,
+                                     fnirt_reg_anat_symm_mni, 'inputspec.reference_skull')
+
+                    node, out_file = strat['template_dilated_symmetric_brain_mask']
+                    workflow.connect(node, out_file,
+                                     fnirt_reg_anat_symm_mni, 'inputspec.ref_mask')
+
+                    strat.append_name(fnirt_reg_anat_symm_mni.name)
+                    strat.set_leaf_properties(fnirt_reg_anat_symm_mni,
+                                              'outputspec.output_brain')
+
+                    strat.update_resource_pool({
+                        'anatomical_to_symmetric_mni_nonlinear_xfm': (
+                            fnirt_reg_anat_symm_mni, 'outputspec.nonlinear_xfm'),
+                        'symmetric_anatomical_to_standard': (
+                            fnirt_reg_anat_symm_mni, 'outputspec.output_brain')
+                    }, override=True)
+
+        strat_list += new_strat_list
+
+        new_strat_list = []
+
+        for num_strat, strat in enumerate(strat_list):
+
+            nodes = strat.get_nodes_names()
+
+            # or run ANTS anatomical-to-MNI registration instead
+            if 'ANTS' in c.regOption and \
+                    'anat_mni_flirt_register' not in nodes and \
+                    'anat_mni_fnirt_register' not in nodes and \
+                    'anat_symmetric_mni_flirt_register' not in nodes and \
+                    'anat_symmetric_mni_fnirt_register' not in nodes:
+
+                ants_reg_anat_symm_mni = \
+                    create_wf_calculate_ants_warp(
+                        'anat_symmetric_mni_ants_register_%d' % num_strat,
+                        num_threads=num_ants_cores
+                    )
+
+                # Input registration parameters
+                ants_reg_anat_symm_mni.inputs.inputspec.interp = c.anatRegANTSinterpolation
+
+                # calculating the transform with the skullstripped is
+                # reported to be better, but it requires very high
+                # quality skullstripping. If skullstripping is imprecise
+                # registration with skull is preferred
+                if 1 in c.regWithSkull:
+
+                    if already_skullstripped == 1:
+                        err_msg = '\n\n[!] CPAC says: You selected ' \
+                                  'to run anatomical registration with ' \
+                                  'the skull, but you also selected to ' \
+                                  'use already-skullstripped images as ' \
+                                  'your inputs. This can be changed ' \
+                                  'in your pipeline configuration ' \
+                                  'editor.\n\n'
+
+                        logger.info(err_msg)
+                        raise Exception
+
+                    # get the skullstripped anatomical from resource pool
+                    node, out_file = strat['anatomical_brain']
+
+                    # pass the anatomical to the workflow
+                    workflow.connect(node, out_file,
+                                     ants_reg_anat_symm_mni,
+                                     'inputspec.anatomical_brain')
+
+                    # pass the reference file
+                    node, out_file = strat['template_symmetric_brain']
+                    workflow.connect(node, out_file,
+                                     ants_reg_anat_symm_mni, 'inputspec.reference_brain')
+
+                    # get the reorient skull-on anatomical from resource
+                    # pool
+                    node, out_file = strat['anatomical_reorient']
+
+                    # pass the anatomical to the workflow
+                    workflow.connect(node, out_file,
+                                     ants_reg_anat_symm_mni,
+                                     'inputspec.anatomical_skull')
+
+                    # pass the reference file
+                    node, out_file = strat['template_symmetric_skull']
+                    workflow.connect(node, out_file,
+                                     ants_reg_anat_symm_mni, 'inputspec.reference_skull')
+
+
+                else:
+                    # get the skullstripped anatomical from resource pool
+                    node, out_file = strat['anatomical_brain']
+
+                    workflow.connect(node, out_file,
+                                     ants_reg_anat_symm_mni,
+                                     'inputspec.anatomical_brain')
+
+                    # pass the reference file
+                    node, out_file = strat['template_symmetric_brain']
+                    workflow.connect(node, out_file,
+                                     ants_reg_anat_symm_mni, 'inputspec.reference_brain')
+
+                ants_reg_anat_symm_mni.inputs.inputspec.set(
+                    dimension=3,
+                    use_histogram_matching=True,
+                    winsorize_lower_quantile=0.01,
+                    winsorize_upper_quantile=0.99,
+                    metric=['MI', 'MI', 'CC'],
+                    metric_weight=[1, 1, 1],
+                    radius_or_number_of_bins=[32, 32, 4],
+                    sampling_strategy=['Regular', 'Regular', None],
+                    sampling_percentage=[0.25, 0.25, None],
+                    number_of_iterations=[[1000, 500, 250, 100],
+                                          [1000, 500, 250, 100],
+                                          [100, 100, 70, 20]],
+                    convergence_threshold=[1e-8, 1e-8, 1e-9],
+                    convergence_window_size=[10, 10, 15],
+                    transforms=['Rigid', 'Affine', 'SyN'],
+                    transform_parameters=[[0.1], [0.1], [0.1, 3, 0]],
+                    shrink_factors=[[8, 4, 2, 1],
+                                    [8, 4, 2, 1],
+                                    [6, 4, 2, 1]],
+                    smoothing_sigmas=[[3, 2, 1, 0],
+                                      [3, 2, 1, 0],
+                                      [3, 2, 1, 0]]
+                )
+
+                if 'lesion_mask' in sub_dict and c.use_lesion_mask \
+                        and 'lesion_preproc' not in nodes:
+                    # Create lesion preproc node to apply afni Refit & Resample
+                    lesion_preproc = create_lesion_preproc(
+                        wf_name='lesion_preproc_%d' % num_strat
+                    )
+                    # Add the name of the node in the strat object
+                    strat.append_name(lesion_preproc.name)
+
+                    # I think I don't need to set this node as leaf but not sure
+                    # strat.set_leaf_properties(lesion_preproc,
+                    # 'inputspec.lesion')
+
+                    # Add the lesion preprocessed to the resource pool
+                    strat.update_resource_pool({
+                        'lesion_reorient': (
+                            lesion_preproc, 'outputspec.reorient')
+                    })
+                    # The Refit lesion is not added to the resource pool because
+                    # it is not used afterward
+
+                    # Retieve the lesion mask from the resource pool
+                    node, out_file = strat['lesion_mask']
+                    # Set the lesion mask as input of lesion_preproc
+                    workflow.connect(
+                        node, out_file,
+                        lesion_preproc, 'inputspec.lesion'
+                    )
+
+                    # Set the output of lesion preproc as parameter of ANTs
+                    # fixed_image_mask option
+                    workflow.connect(
+                        lesion_preproc, 'outputspec.reorient',
+                        ants_reg_anat_symm_mni, 'inputspec.fixed_image_mask'
+                    )
+                else:
+                    ants_reg_anat_symm_mni.inputs.inputspec.fixed_image_mask = \
+                        None
+
+                strat.append_name(ants_reg_anat_symm_mni.name)
+                strat.set_leaf_properties(ants_reg_anat_symm_mni,
+                                          'outputspec.normalized_output_brain')
+
+                strat.update_resource_pool({
+                    'ants_symmetric_initial_xfm': (ants_reg_anat_symm_mni, 'outputspec.ants_initial_xfm'),
+                    'ants_symmetric_rigid_xfm': (ants_reg_anat_symm_mni, 'outputspec.ants_rigid_xfm'),
+                    'ants_symmetric_affine_xfm': (ants_reg_anat_symm_mni, 'outputspec.ants_affine_xfm'),
+                    'anatomical_to_symmetric_mni_nonlinear_xfm': (ants_reg_anat_symm_mni, 'outputspec.warp_field'),
+                    'symmetric_mni_to_anatomical_nonlinear_xfm': (
+                    ants_reg_anat_symm_mni, 'outputspec.inverse_warp_field'),
+                    'anat_to_symmetric_mni_ants_composite_xfm': (
+                    ants_reg_anat_symm_mni, 'outputspec.composite_transform'),
+                    'symmetric_anatomical_to_standard': (ants_reg_anat_symm_mni, 'outputspec.normalized_output_brain')
+                })
+
+        strat_list += new_strat_list
+
+
 def create_datasink(datasink_name, conf, subject_id, session_id='', strat_name='', map_node_iterfield=None):
     try:
         encrypt_data = bool(conf.s3Encryption[0])
@@ -423,7 +1029,6 @@ def create_datasink(datasink_name, conf, subject_id, session_id='', strat_name='
         'pipeline_%s_%s' % (conf.pipelineName, strat_name),
         subject_id, session_id
     )
-
     return ds
 
 
@@ -467,6 +1072,7 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
     for session in sub_list:
         unique_id = session['unique_id']
         session_id_list.append(unique_id)
+
         try:
             creds_path = session['creds_path']
             if creds_path and 'none' not in creds_path.lower():
@@ -506,8 +1112,6 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
         def connect_anat_preproc_inputs(strat_in, anat_preproc_in, strat_name):
             new_strat_out = strat_in.fork()
 
-            strat_nodes_list_list[strat_name] = []
-
             tmp_node, out_key = new_strat_out['anatomical']
             workflow.connect(tmp_node, out_key, anat_preproc_in, 'inputspec.anat')
 
@@ -522,9 +1126,10 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                 'anatomical_reorient': (
                     anat_preproc_in, 'outputspec.reorient'),
             })
-
-            # strat_nodes_list_list[strat_name].append(anat_preproc_in)
-            strat_nodes_list_list[strat_name].append(new_strat_out)
+            try:
+                strat_nodes_list_list[strat_name].append(new_strat_out)
+            except KeyError:
+                strat_nodes_list_list[strat_name] = [new_strat_out]
 
             return new_strat_out
 
@@ -674,6 +1279,8 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                                        map_node_iterfield=['warp_list'])
         workflow.connect(template_node, "final_warp_list", ds_warp_list, 'warp_list')
 
+        # TODO add the registration to the selected standard template HERE!
+
         # the in{}.format take i+1 because the Merge nodes inputs starts at 1 ...
         for i in range(len(strat_nodes_list)):
             rsc_nodes_suffix = "_%s_%d" % (node_suffix, i)
@@ -682,7 +1289,6 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
             workflow.connect(anat_preproc_node,
                              rsc_name, merge_node,
                              'in{}'.format(i + 1))
-
             ds_brain = create_datasink(rsc_key + rsc_nodes_suffix, conf, subject_id,
                                        session_id_list[i], strat_name)
             workflow.connect(anat_preproc_node, rsc_name, ds_brain, rsc_key)

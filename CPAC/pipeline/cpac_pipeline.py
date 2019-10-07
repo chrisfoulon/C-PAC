@@ -439,7 +439,6 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
 
         strat_initial.update_resource_pool({template_name: (resampled_template, 'resampled_template')})
 
-    strat_list += [strat_initial]
     # if the image has already been registered with the longitudinal preproc
     if 'reg_anat' in sub_dict.keys():
         lesion_datasource = create_anat_datasource(
@@ -477,8 +476,7 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
         template_center_of_mass, 'in_file'
     )
 
-    num_strat += 1
-    strat_list.append(strat_initial)
+    strat_list += [strat_initial]
 
     new_strat_list = []
 

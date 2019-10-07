@@ -169,6 +169,11 @@ def run_cpac_on_cluster(config_file, subject_list_file,
         f.write(pid)
 
 
+def is_in_subject(path, sub_dict):
+    anat = os.path.basename(sub_dict['anat']).split('.')[0]
+    return anat in path
+
+
 # Run C-PAC subjects via job queue
 def run(subject_list_file, config_file=None, p_name=None, plugin=None,
         plugin_args=None, tracking=True, num_subs_at_once=None, debug=False):
@@ -295,19 +300,39 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
                 if f != '.DS_Store':
                     rsc_file_list.append(os.path.join(dirpath, f))
         from collections import defaultdict
-        rsc_dict = defaultdict(lambda: {})
+        rsc_dict = defaultdict(dict)
+
         for f in rsc_file_list:
-            tmp = f.split(c.outputDirectory)[-1]
-            keys = tmp.split(os.sep)
-            if keys[0] == '':
-                keys = keys[1:]
-            # it's a subject specific resource(template)
-            if len(keys) == 4:
-                rsc_dict[keys[0].split(c.pipelineName + '_')[-1]][keys[1]][keys[2]] = f
-            # it's a session specific resource
-            if len(keys) == 5:
-                rsc_dict[keys[0].split(c.pipelineName + '_')[-1]][keys[1]][keys[-1]] = f
-        print(dict(rsc_dict))
+            ses_list = filter(lambda x: is_in_subject(f, x), sublist)
+            if len(ses_list) > 1:
+                raise Exception("There are several files containing " + f)
+            if len(ses_list) == 1:
+                ses = ses_list[0]
+                tmp = f.split(c.outputDirectory)[-1]
+                keys = tmp.split(os.sep)
+                # print(keys)
+                if keys[0] == '':
+                    keys = keys[1:]
+                # it's a subject specific resource(template)
+                if len(keys) == 4:
+                    ses.update({'resource_pool': {
+                        keys[0].split(c.pipelineName + '_')[-1]: {
+                            keys[1]: {
+                                keys[2]: f
+                            }
+                        }
+                    }})
+
+                    # rsc_dict[keys[0].split(c.pipelineName + '_')[-1]][keys[1]][keys[2]] = f
+                # it's a session specific resource
+                if len(keys) == 5:
+                    ses.update({'resource_pool': {
+                        keys[0].split(c.pipelineName + '_')[-1]: {
+                            keys[3]: f
+                        }
+                    }})
+                    # rsc_dict[keys[0].split(c.pipelineName + '_')[-1]][keys[1]][keys[3]] = f
+        print(sublist)
 
         import sys
         sys.exit()
