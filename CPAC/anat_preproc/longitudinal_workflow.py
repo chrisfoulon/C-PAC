@@ -1305,6 +1305,6 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                              'in{}'.format(i + 1))
 
         workflow.connect(merge_node, 'out', template_node, 'img_list')
-
     workflow.run()
+    print('anatomical' in Outputs.any)
     return
