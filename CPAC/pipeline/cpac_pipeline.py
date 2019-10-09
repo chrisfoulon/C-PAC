@@ -368,8 +368,7 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
                     input_creds_path, c.outputDirectory
                 )
                 resource_pool[rsc_name] = (node, 'local_path')
-                # I don't know why we'd need it
-                # setattr(c, rsc_path, node)
+
             strat.update_resource_pool(resource_pool)
             strat_list += [strat]
 

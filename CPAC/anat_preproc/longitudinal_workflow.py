@@ -41,7 +41,7 @@ from CPAC.func_preproc.func_preproc import (
 )
 from CPAC.anat_preproc.longitudinal_preproc import subject_specific_template
 
-from CPAC.utils import Strategy, find_files, function
+from CPAC.utils import Strategy, find_files, function, Outputs
 
 from CPAC.utils.utils import (
     check_config_resources,
@@ -1289,22 +1289,20 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
         # workflow.connect(registration_workflow, "final_warp_list", ds_warp_list, 'warp_list')
 
         # the in{}.format take i+1 because the Merge nodes inputs starts at 1 ...
+
         for i in range(len(strat_nodes_list)):
             rsc_nodes_suffix = "_%s_%d" % (node_suffix, i)
+            for rsc_key in strat_nodes_list[i].resource_pool.keys():
+                if rsc_key in Outputs.any:
+                    node, rsc_name = strat_nodes_list[i][rsc_key]
+                    ds = create_datasink(rsc_key + rsc_nodes_suffix, conf, subject_id,
+                                         session_id_list[i], strat_name)
+                    workflow.connect(node, rsc_name, ds, rsc_key)
             rsc_key = 'anatomical_brain'
             anat_preproc_node, rsc_name = strat_nodes_list[i][rsc_key]
             workflow.connect(anat_preproc_node,
                              rsc_name, merge_node,
                              'in{}'.format(i + 1))
-            ds_brain = create_datasink(rsc_key + rsc_nodes_suffix, conf, subject_id,
-                                       session_id_list[i], strat_name)
-            workflow.connect(anat_preproc_node, rsc_name, ds_brain, rsc_key)
-
-            rsc_key = 'anatomical_reorient'
-            anat_preproc_node, rsc_name = strat_nodes_list[i][rsc_key]
-            ds_brain = create_datasink(rsc_key + rsc_nodes_suffix, conf, subject_id,
-                                       session_id_list[i], strat_name)
-            workflow.connect(anat_preproc_node, rsc_name, ds_brain, rsc_key)
 
         workflow.connect(merge_node, 'out', template_node, 'img_list')
 
