@@ -1251,7 +1251,6 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                 raise Exception(err)
 
     # loop over the different skull stripping strategies
-    print(sub_list)
     for strat_name, strat_nodes_list in strat_nodes_list_list.items():
         node_suffix = '_'.join([strat_name, subject_id])
         merge_node = pe.Node(
@@ -1281,13 +1280,13 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
         workflow.connect(template_node, "final_warp_list", ds_warp_list, 'warp_list')
 
         # TODO add the registration to the selected standard template HERE!
-        registration_workflow = register_to_standard_template(sub_list[i], strat_nodes_list, conf, workflow)
-
-        workflow.connect(template_node, 'template', registration_workflow, 'inputspec.longitudinal_temaplate')
-
-        rsc_key = 'longitudinal_template_to_standard_warp'
-        ds_standard_warp = create_datasink(rsc_key + node_suffix, conf, subject_id, strat_name=strat_name)
-        workflow.connect(registration_workflow, "final_warp_list", ds_warp_list, 'warp_list')
+        # registration_workflow = register_to_standard_template(sub_list[i], strat_nodes_list, conf, workflow)
+        #
+        # workflow.connect(template_node, 'template', registration_workflow, 'inputspec.longitudinal_temaplate')
+        #
+        # rsc_key = 'longitudinal_template_to_standard_warp'
+        # ds_standard_warp = create_datasink(rsc_key + node_suffix, conf, subject_id, strat_name=strat_name)
+        # workflow.connect(registration_workflow, "final_warp_list", ds_warp_list, 'warp_list')
 
         # the in{}.format take i+1 because the Merge nodes inputs starts at 1 ...
         for i in range(len(strat_nodes_list)):

@@ -361,15 +361,15 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
         for strat_name, resource_pool in sub_dict['resource_pool'].items():
             strat = strat_initial.fork()
             strat.append_name(strat_name)
-
             for rsc_name, rsc_path in resource_pool.items():
                 node = create_check_for_s3_node(
                     rsc_name,
                     rsc_path, 'other',
                     input_creds_path, c.outputDirectory
                 )
-
-                setattr(c, rsc_path, node)
+                resource_pool[rsc_name] = (node, 'local_path')
+                # I don't know why we'd need it
+                # setattr(c, rsc_path, node)
             strat.update_resource_pool(resource_pool)
             strat_list += [strat]
 

@@ -174,6 +174,16 @@ def is_in_subject(path, sub_dict):
     return anat in path
 
 
+def update_dict(d, key, value):
+    try:
+        if isinstance(value, dict):
+            d[key].update(value)
+        else:
+            d[key] = value
+    except KeyError:
+        d.update({key: value})
+
+
 # Run C-PAC subjects via job queue
 def run(subject_list_file, config_file=None, p_name=None, plugin=None,
         plugin_args=None, tracking=True, num_subs_at_once=None, debug=False):
@@ -299,42 +309,83 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
                 # Thanks Apple, you're the best.
                 if f != '.DS_Store':
                     rsc_file_list.append(os.path.join(dirpath, f))
-        from collections import defaultdict
-        rsc_dict = defaultdict(dict)
 
-        for f in rsc_file_list:
-            ses_list = filter(lambda x: is_in_subject(f, x), sublist)
-            if len(ses_list) > 1:
-                raise Exception("There are several files containing " + f)
-            if len(ses_list) == 1:
-                ses = ses_list[0]
-                tmp = f.split(c.outputDirectory)[-1]
-                keys = tmp.split(os.sep)
-                print(keys)
-                print(len(keys))
-                if keys[0] == '':
-                    keys = keys[1:]
-                # it's a subject specific resource(template)
-                if len(keys) == 4:
-                    ses.update({'resource_pool': {
-                        keys[0].split(c.pipelineName + '_')[-1]: {
-                            keys[1]: {
-                                keys[2]: f
+        subject_specific_dict = {subj: [] for subj in subject_id_dict.keys()}
+        session_specific_dict = {os.path.join(session['subject_id'], session['unique_id']): [] for session in sublist}
+        for rsc_path in rsc_file_list:
+            key = [s for s in session_specific_dict.keys() if s in rsc_path]
+            if key:
+                session_specific_dict[key[0]].append(rsc_path)
+            else:
+                subj = [s for s in subject_specific_dict.keys() if s in rsc_path]
+                if subj:
+                    subject_specific_dict[subj[0]].append(rsc_path)
+        print(subject_specific_dict)
+        print(session_specific_dict)
+
+        for key in session_specific_dict.keys():
+            for f in session_specific_dict[key]:
+                ses_list = [subj for subj in sublist if key in subj['anat']]
+                if len(ses_list) > 1:
+                    raise Exception("There are several files containing " + f)
+                if len(ses_list) == 1:
+                    ses = ses_list[0]
+                    subj_id = ses['subject_id']
+                    tmp = f.split(c.outputDirectory)[-1]
+                    keys = tmp.split(os.sep)
+                    if keys[0] == '':
+                        keys = keys[1:]
+                    print(keys)
+                    print(len(keys))
+                    if len(keys) > 1:
+                        if ses.get('resource_pool') is None:
+                            ses['resource_pool'] = {
+                                keys[0].split(c.pipelineName + '_')[-1]: {
+                                    keys[-2]: f
+                                }
                             }
-                        }
-                    }})
+                        else:
+                            strat_key = keys[0].split(c.pipelineName + '_')[-1]
+                            if ses['resource_pool'].get(strat_key) is None:
+                                ses['resource_pool'].update({
+                                    strat_key: {
+                                        keys[-2]: f
+                                    }
+                                })
+                            else:
+                                ses['resource_pool'][strat_key].update({
+                                        keys[-2]: f
+                                    })
 
-                    # rsc_dict[keys[0].split(c.pipelineName + '_')[-1]][keys[1]][keys[2]] = f
-                # it's a session specific resource
-                if len(keys) == 5:
-                    ses.update({'resource_pool': {
-                        keys[0].split(c.pipelineName + '_')[-1]: {
-                            keys[3]: f
-                        }
-                    }})
-                    # rsc_dict[keys[0].split(c.pipelineName + '_')[-1]][keys[1]][keys[3]] = f
-        # print(sublist)
+        for key in subject_specific_dict:
+            for f in subject_specific_dict[key]:
+                ses_list = [subj for subj in sublist if key in subj['anat']]
+                for ses in ses_list:
+                    tmp = f.split(c.outputDirectory)[-1]
+                    keys = tmp.split(os.sep)
+                    if keys[0] == '':
+                        keys = keys[1:]
+                    if len(keys) > 1:
+                        if ses.get('resource_pool') is None:
+                            ses['resource_pool'] = {
+                                keys[0].split(c.pipelineName + '_')[-1]: {
+                                    keys[-2]: f
+                                }
+                            }
+                        else:
+                            strat_key = keys[0].split(c.pipelineName + '_')[-1]
+                            if ses['resource_pool'].get(strat_key) is None:
+                                ses['resource_pool'].update({
+                                    strat_key: {
+                                        keys[-2]: f
+                                    }
+                                })
+                            else:
+                                ses['resource_pool'][strat_key].update({
+                                        keys[-2]: f
+                                    })
 
+        yaml.dump(sublist, open('/outputs/output/data_config_long_reg.yml', 'w'), default_flow_style=False)
         import sys
         sys.exit()
 
