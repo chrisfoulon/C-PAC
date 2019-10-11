@@ -34,7 +34,6 @@ from CPAC.utils.datasource import (
 )
 
 from CPAC.anat_preproc.anat_preproc import create_anat_preproc
-from CPAC.anat_preproc.lesion_preproc import create_lesion_preproc
 from CPAC.func_preproc.func_preproc import (
     create_func_preproc,
     create_wf_edit_func
@@ -53,153 +52,11 @@ from CPAC.utils.utils import (
 logger = logging.getLogger('nipype.workflow')
 
 
-def init_subject_wf(sub_dict, conf):
-    c = copy.copy(conf)
-
-    subject_id = sub_dict['subject_id']
-    if sub_dict['unique_id']:
-        subject_id += "_" + sub_dict['unique_id']
-
-    log_dir = os.path.join(c.logDirectory, 'pipeline_%s' % c.pipelineName,
-                           subject_id)
-    if not os.path.exists(log_dir):
-        os.makedirs(os.path.join(log_dir))
-
-    config.update_config({
-        'logging': {
-            'log_directory': log_dir,
-            'log_to_file': bool(getattr(c, 'run_logging', True))
-        }
-    })
-
-    logging.update_logging(config)
-
-    # Start timing here
-    pipeline_start_time = time.time()
-    # TODO LONG_REG change prep_worflow to use this attribute instead of the local var
-    c.update('pipeline_start_time', pipeline_start_time)
-
-    # Check pipeline config resources
-    sub_mem_gb, num_cores_per_sub, num_ants_cores = \
-        check_config_resources(c)
-
-    # TODO LONG_REG understand and handle that
-    # if plugin_args:
-    #     plugin_args['memory_gb'] = sub_mem_gb
-    #     plugin_args['n_procs'] = num_cores_per_sub
-    # else:
-    #     plugin_args = {'memory_gb': sub_mem_gb, 'n_procs': num_cores_per_sub}
-
-    # perhaps in future allow user to set threads maximum
-    # this is for centrality mostly
-    # import mkl
-    numThreads = '1'
-    os.environ['OMP_NUM_THREADS'] = '1'  # str(num_cores_per_sub)
-    os.environ['MKL_NUM_THREADS'] = '1'  # str(num_cores_per_sub)
-    os.environ['ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = str(num_ants_cores)
-
-    # calculate maximum potential use of cores according to current pipeline
-    # configuration
-    max_core_usage = int(c.maxCoresPerParticipant) * int(
-        c.numParticipantsAtOnce)
-
-    information = """
-
-        C-PAC version: {cpac_version}
-
-        Setting maximum number of cores per participant to {cores}
-        Setting number of participants at once to {participants}
-        Setting OMP_NUM_THREADS to {threads}
-        Setting MKL_NUM_THREADS to {threads}
-        Setting ANTS/ITK thread usage to {ants_threads}
-        Maximum potential number of cores that might be used during this run: {max_cores}
+def func_template_generation(sub_list, conf):
+    """
+    This has to be completely reworked, it was just written long ago.
 
     """
-
-    logger.info(information.format(
-        cpac_version=CPAC.__version__,
-        cores=c.maxCoresPerParticipant,
-        participants=c.numParticipantsAtOnce,
-        threads=numThreads,
-        ants_threads=c.num_ants_threads,
-        max_cores=max_core_usage
-    ))
-
-    # Check system dependencies
-    check_system_deps(check_ants='ANTS' in c.regOption,
-                      check_ica_aroma='1' in str(c.runICA[0]))
-
-    # absolute paths of the dirs
-    c.workingDirectory = os.path.abspath(c.workingDirectory)
-    if 's3://' not in c.outputDirectory:
-        c.outputDirectory = os.path.abspath(c.outputDirectory)
-
-    # Workflow setup
-    workflow_name = 'resting_preproc_' + str(subject_id)
-    workflow = pe.Workflow(name=workflow_name)
-    workflow.base_dir = c.workingDirectory
-    workflow.config['execution'] = {
-        'hash_method': 'timestamp',
-        'crashdump_dir': os.path.abspath(c.crashLogDirectory)
-    }
-
-    # Extract credentials path if it exists
-    try:
-        creds_path = sub_dict['creds_path']
-        if creds_path and 'none' not in creds_path.lower():
-            if os.path.exists(creds_path):
-                input_creds_path = os.path.abspath(creds_path)
-            else:
-                err_msg = 'Credentials path: "%s" for subject "%s" was not ' \
-                          'found. Check this path and try again.' % (
-                              creds_path, subject_id)
-                raise Exception(err_msg)
-        else:
-            input_creds_path = None
-    except KeyError:
-        input_creds_path = None
-
-    # TODO ASH normalize file paths with schema validator
-    template_anat_keys = [
-        ("anat", "template_brain_only_for_anat"),
-        ("anat", "template_skull_for_anat"),
-        ("anat", "ref_mask"),
-        ("anat", "template_symmetric_brain_only"),
-        ("anat", "template_symmetric_skull"),
-        ("anat", "dilated_symmetric_brain_mask"),
-        ("anat", "templateSpecificationFile"),
-        ("anat", "lateral_ventricles_mask"),
-        ("anat", "PRIORS_CSF"),
-        ("anat", "PRIORS_GRAY"),
-        ("anat", "PRIORS_WHITE"),
-        ("other", "configFileTwomm"),
-    ]
-
-    for key_type, key in template_anat_keys:
-        node = create_check_for_s3_node(
-            key,
-            getattr(c, key), key_type,
-            input_creds_path, c.workingDirectory
-        )
-
-        setattr(c, key, node)
-
-    if c.reGenerateOutputs is True:
-        working_dir = os.path.join(c.workingDirectory, workflow_name)
-        erasable = list(find_files(working_dir, '*sink*')) + \
-                   list(find_files(working_dir, '*link*')) + \
-                   list(find_files(working_dir, '*log*'))
-
-        for f in erasable:
-            if os.path.isfile(f):
-                os.remove(f)
-            else:
-                shutil.rmtree(f)
-
-    return c, subject_id, input_creds_path
-
-
-def func_template_generation(sub_list, conf):
     wf_list = []
     datasink = pe.Node(nio.DataSink(), name='sinker')
     datasink.inputs.base_directory = conf.workingDirectory
@@ -385,7 +242,7 @@ def func_template_generation(sub_list, conf):
     return wf_list
 
 
-def register_to_standard_template(sub_dict, strat_list, c, workflow):
+def register_to_standard_template(long_reg_template_node, c, workflow):
     already_skullstripped = c.already_skullstripped[0]
     if already_skullstripped == 2:
         already_skullstripped = 0
@@ -394,8 +251,66 @@ def register_to_standard_template(sub_dict, strat_list, c, workflow):
 
     sub_mem_gb, num_cores_per_sub, num_ants_cores = \
         check_config_resources(c)
+    strat_initial = Strategy()
 
-    # either run FSL anatomical-to-MNI registration, or...
+    strat_initial.update_resource_pool({
+        'anatomical_brain': (long_reg_template_node, 'template')
+    })
+
+    templates_for_resampling = [
+        (c.resolution_for_anat, c.template_brain_only_for_anat, 'template_brain_for_anat', 'resolution_for_anat'),
+        (c.resolution_for_anat, c.template_skull_for_anat, 'template_skull_for_anat', 'resolution_for_anat'),
+        (c.resolution_for_anat, c.template_symmetric_brain_only, 'template_symmetric_brain', 'resolution_for_anat'),
+        (c.resolution_for_anat, c.template_symmetric_skull, 'template_symmetric_skull', 'resolution_for_anat'),
+        (c.resolution_for_anat, c.dilated_symmetric_brain_mask, 'template_dilated_symmetric_brain_mask',
+         'resolution_for_anat'),
+        (c.resolution_for_anat, c.ref_mask, 'template_ref_mask', 'resolution_for_anat'),
+        (c.resolution_for_func_preproc, c.template_brain_only_for_func, 'template_brain_for_func_preproc',
+         'resolution_for_func_preproc'),
+        (c.resolution_for_func_preproc, c.template_skull_for_func, 'template_skull_for_func_preproc',
+         'resolution_for_func_preproc'),
+        (c.resolution_for_func_derivative, c.template_brain_only_for_func, 'template_brain_for_func_derivative',
+         'resolution_for_func_preproc'),
+        (c.resolution_for_func_derivative, c.template_skull_for_func, 'template_skull_for_func_derivative',
+         'resolution_for_func_preproc')
+    ]
+
+    # update resampled template to resource pool
+    for resolution, template, template_name, tag in templates_for_resampling:
+        # print(resolution, template, template_name)
+
+        resampled_template = pe.Node(Function(input_names=['resolution', 'template', 'template_name', 'tag'],
+                                              output_names=['resampled_template'],
+                                              function=resolve_resolution,
+                                              as_module=True),
+                                     name='resampled_' + template_name)
+
+        resampled_template.inputs.resolution = resolution
+        resampled_template.inputs.template = template
+        resampled_template.inputs.template_name = template_name
+        resampled_template.inputs.tag = tag
+
+        strat_initial.update_resource_pool({template_name: (resampled_template, 'resampled_template')})
+
+    # node, out_file = strat['anatomical_brain']
+    #
+    # # pass the reference files
+    # node, out_file = strat['template_brain_for_anat']
+    #
+    # node, out_file = strat['anatomical_reorient']
+    #
+    # node, out_file = strat['anatomical_to_mni_linear_xfm']
+    #
+    # node, out_file = strat['template_skull_for_anat']
+    #
+    # node, out_file = strat['template_symmetric_skull']
+    #
+    # node, out_file = strat['template_dilated_symmetric_brain_mask']
+    #
+    # node, out_file = strat['template_ref_mask']
+
+    strat_list = [strat_initial]
+
     new_strat_list = []
 
     # either run FSL anatomical-to-MNI registration, or...
@@ -486,9 +401,10 @@ def register_to_standard_template(sub_dict, strat_list, c, workflow):
                 workflow.connect(node, out_file,
                                  fnirt_reg_anat_mni, 'inputspec.reference_brain')
 
-                node, out_file = strat['anatomical_reorient']
-                workflow.connect(node, out_file,
-                                 fnirt_reg_anat_mni, 'inputspec.input_skull')
+                # We don't have this image for the longitudinal template
+                # node, out_file = strat['anatomical_reorient']
+                # workflow.connect(node, out_file,
+                #                  fnirt_reg_anat_mni, 'inputspec.input_skull')
 
                 node, out_file = strat['anatomical_to_mni_linear_xfm']
                 workflow.connect(node, out_file,
@@ -583,13 +499,14 @@ def register_to_standard_template(sub_dict, strat_list, c, workflow):
                 workflow.connect(node, out_file,
                                  ants_reg_anat_mni, 'inputspec.reference_brain')
 
-                # get the reorient skull-on anatomical from resource pool
-                node, out_file = strat['anatomical_reorient']
 
-                # pass the anatomical to the workflow
-                workflow.connect(node, out_file,
-                                 ants_reg_anat_mni,
-                                 'inputspec.anatomical_skull')
+                # # get the reorient skull-on anatomical from resource pool
+                # node, out_file = strat['anatomical_reorient']
+                #
+                # # pass the anatomical to the workflow
+                # workflow.connect(node, out_file,
+                #                  ants_reg_anat_mni,
+                #                  'inputspec.anatomical_skull')
 
                 # pass the reference file
                 node, out_file = strat['template_skull_for_anat']
@@ -640,41 +557,7 @@ def register_to_standard_template(sub_dict, strat_list, c, workflow):
                     [3, 2, 1, 0]
                 ]
             )
-            # Test if a lesion mask is found for the anatomical image
-            if 'lesion_mask' in sub_dict and c.use_lesion_mask \
-                    and 'lesion_preproc' not in nodes:
-                # Create lesion preproc node to apply afni Refit and Resample
-                lesion_preproc = create_lesion_preproc(
-                    wf_name='lesion_preproc_%d' % num_strat
-                )
-                # Add the name of the node in the strat object
-                strat.append_name(lesion_preproc.name)
-                # I think I don't need to set this node as leaf but not sure
-                # strat.set_leaf_properties(lesion_preproc, 'inputspec.lesion')
-
-                # Add the lesion preprocessed to the resource pool
-                strat.update_resource_pool({
-                    'lesion_reorient': (lesion_preproc, 'outputspec.reorient')
-                })
-                # The Refit lesion is not added to the resource pool because
-                # it is not used afterward
-
-                # Retieve the lesion mask from the resource pool
-                node, out_file = strat['lesion_mask']
-                # Set the lesion mask as input of lesion_preproc
-                workflow.connect(
-                    node, out_file,
-                    lesion_preproc, 'inputspec.lesion'
-                )
-
-                # Set the output of lesion preproc as parameter of ANTs
-                # fixed_image_mask option
-                workflow.connect(
-                    lesion_preproc, 'outputspec.reorient',
-                    ants_reg_anat_mni, 'inputspec.fixed_image_mask'
-                )
-            else:
-                ants_reg_anat_mni.inputs.inputspec.fixed_image_mask = None
+            ants_reg_anat_mni.inputs.inputspec.fixed_image_mask = None
 
             strat.append_name(ants_reg_anat_mni.name)
 
@@ -786,10 +669,10 @@ def register_to_standard_template(sub_dict, strat_list, c, workflow):
                     workflow.connect(node, out_file,
                                      fnirt_reg_anat_symm_mni, 'inputspec.reference_brain')
 
-                    node, out_file = strat['anatomical_reorient']
-                    workflow.connect(node, out_file,
-                                     fnirt_reg_anat_symm_mni,
-                                     'inputspec.input_skull')
+                    # node, out_file = strat['anatomical_reorient']
+                    # workflow.connect(node, out_file,
+                    #                  fnirt_reg_anat_symm_mni,
+                    #                  'inputspec.input_skull')
 
                     node, out_file = strat['anatomical_to_mni_linear_xfm']
                     workflow.connect(node, out_file,
@@ -870,14 +753,14 @@ def register_to_standard_template(sub_dict, strat_list, c, workflow):
                     workflow.connect(node, out_file,
                                      ants_reg_anat_symm_mni, 'inputspec.reference_brain')
 
-                    # get the reorient skull-on anatomical from resource
-                    # pool
-                    node, out_file = strat['anatomical_reorient']
-
-                    # pass the anatomical to the workflow
-                    workflow.connect(node, out_file,
-                                     ants_reg_anat_symm_mni,
-                                     'inputspec.anatomical_skull')
+                    # # get the reorient skull-on anatomical from resource
+                    # # pool
+                    # node, out_file = strat['anatomical_reorient']
+                    #
+                    # # pass the anatomical to the workflow
+                    # workflow.connect(node, out_file,
+                    #                  ants_reg_anat_symm_mni,
+                    #                  'inputspec.anatomical_skull')
 
                     # pass the reference file
                     node, out_file = strat['template_symmetric_skull']
@@ -923,44 +806,7 @@ def register_to_standard_template(sub_dict, strat_list, c, workflow):
                                       [3, 2, 1, 0]]
                 )
 
-                if 'lesion_mask' in sub_dict and c.use_lesion_mask \
-                        and 'lesion_preproc' not in nodes:
-                    # Create lesion preproc node to apply afni Refit & Resample
-                    lesion_preproc = create_lesion_preproc(
-                        wf_name='lesion_preproc_%d' % num_strat
-                    )
-                    # Add the name of the node in the strat object
-                    strat.append_name(lesion_preproc.name)
-
-                    # I think I don't need to set this node as leaf but not sure
-                    # strat.set_leaf_properties(lesion_preproc,
-                    # 'inputspec.lesion')
-
-                    # Add the lesion preprocessed to the resource pool
-                    strat.update_resource_pool({
-                        'lesion_reorient': (
-                            lesion_preproc, 'outputspec.reorient')
-                    })
-                    # The Refit lesion is not added to the resource pool because
-                    # it is not used afterward
-
-                    # Retieve the lesion mask from the resource pool
-                    node, out_file = strat['lesion_mask']
-                    # Set the lesion mask as input of lesion_preproc
-                    workflow.connect(
-                        node, out_file,
-                        lesion_preproc, 'inputspec.lesion'
-                    )
-
-                    # Set the output of lesion preproc as parameter of ANTs
-                    # fixed_image_mask option
-                    workflow.connect(
-                        lesion_preproc, 'outputspec.reorient',
-                        ants_reg_anat_symm_mni, 'inputspec.fixed_image_mask'
-                    )
-                else:
-                    ants_reg_anat_symm_mni.inputs.inputspec.fixed_image_mask = \
-                        None
+                ants_reg_anat_symm_mni.inputs.inputspec.fixed_image_mask = None
 
                 strat.append_name(ants_reg_anat_symm_mni.name)
                 strat.set_leaf_properties(ants_reg_anat_symm_mni,
@@ -979,9 +825,25 @@ def register_to_standard_template(sub_dict, strat_list, c, workflow):
                 })
 
         strat_list += new_strat_list
+        return strat_list
 
 
 def create_datasink(datasink_name, conf, subject_id, session_id='', strat_name='', map_node_iterfield=None):
+    """
+
+    Parameters
+    ----------
+    datasink_name
+    conf
+    subject_id
+    session_id
+    strat_name
+    map_node_iterfield
+
+    Returns
+    -------
+
+    """
     try:
         encrypt_data = bool(conf.s3Encryption[0])
     except:
@@ -1033,10 +895,28 @@ def create_datasink(datasink_name, conf, subject_id, session_id='', strat_name='
 
 
 def anat_longitudinal_workflow(sub_list, subject_id, conf):
-    """"""
+    """
+
+    Parameters
+    ----------
+    sub_list : list of dict
+        this is a list of sessions for one subject and each session if the same dictionary as the one given to
+        prep_workflow
+    subject_id : str
+        the id of the subject
+    conf : Configuration
+        a configuration object containing the information of the pipeline config. (Same as for prep_workflow)
+
+    Returns
+    -------
+        None
+        runs the workflow once it is built
+    """
+    # debug mode
+    # from nipype import config
+    # config.enable_debug_mode()
+
     # For each participant we have a list of dict (each dict is a session)
-    from nipype import config
-    config.enable_debug_mode()
     # TODO ASH temporary code, remove
     # TODO ASH maybe scheme validation/normalization
     already_skullstripped = conf.already_skullstripped[0]
@@ -1050,7 +930,7 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
         conf.template_skull_for_anat,
         'template_skull_for_anat',
         'resolution_for_anat')
-
+    # Node to calculate the center of mass of the standard template to align the images with it.
     template_center_of_mass = pe.Node(
         interface=afni.CenterMass(),
         name='template_skull_for_anat_center_of_mass'
@@ -1110,6 +990,22 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
         })
 
         def connect_anat_preproc_inputs(strat_in, anat_preproc_in, strat_name):
+            """
+
+            Parameters
+            ----------
+            strat_in : Strategy
+                the strategy object you want to fork
+            anat_preproc_in : Workflow
+                the anat_preproc workflow node to be connected and added to the resource pool
+            strat_name : str
+                name of the strategy
+
+            Returns
+            -------
+                new_strat_out : Strategy
+                    the fork of strat_in with the resource pool updated
+            """
             new_strat_out = strat_in.fork()
 
             tmp_node, out_key = new_strat_out['anatomical']
@@ -1119,6 +1015,7 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                              anat_preproc_in, 'inputspec.template_cmass')
 
             new_strat_out.append_name(anat_preproc_in.name)
+            # TODO it is not used further so I think it can be removed
             new_strat_out.set_leaf_properties(anat_preproc_in, 'outputspec.brain')
             new_strat_out.update_resource_pool({
                 'anatomical_brain': (
@@ -1132,7 +1029,7 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                 strat_nodes_list_list[strat_name] = [new_strat_out]
 
             return new_strat_out
-
+        # Here we have the same strategies for the skull stripping as in prep_workflow
         if 'brain_mask' in session.keys() and session['brain_mask'] and \
                 session['brain_mask'].lower() != 'none':
 
@@ -1250,13 +1147,19 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                         str(conf.skullstrip_option))
                 raise Exception(err)
 
+    # Here we have all the anat_preproc set up for every session of the subject
+
     # loop over the different skull stripping strategies
     for strat_name, strat_nodes_list in strat_nodes_list_list.items():
         node_suffix = '_'.join([strat_name, subject_id])
+        # Merge node to feed the anat_preproc outputs to the longitudinal template generation
         merge_node = pe.Node(
             interface=Merge(len(strat_nodes_list)),
             name="anat_longitudinal_merge_" + node_suffix)
 
+        # This node will generate the longitudinal template (the functions are in longitudinal_preproc)
+        # Later other algorithms could be added to calculate it, like the multivariate template from ANTS
+        # It would just require to change it here.
         template_node = subject_specific_template(
             workflow_name='subject_specific_template_' + node_suffix
         )
@@ -1279,17 +1182,18 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                                        map_node_iterfield=['warp_list'])
         workflow.connect(template_node, "final_warp_list", ds_warp_list, 'warp_list')
 
-        # TODO add the registration to the selected standard template HERE!
-        # registration_workflow = register_to_standard_template(sub_list[i], strat_nodes_list, conf, workflow)
-        #
-        # workflow.connect(template_node, 'template', registration_workflow, 'inputspec.longitudinal_temaplate')
-        #
-        # rsc_key = 'longitudinal_template_to_standard_warp'
-        # ds_standard_warp = create_datasink(rsc_key + node_suffix, conf, subject_id, strat_name=strat_name)
-        # workflow.connect(registration_workflow, "final_warp_list", ds_warp_list, 'warp_list')
+        # TODO debug the registration from the longitudinal template to the standard template (MNI?)
+        reg_strat_list = register_to_standard_template(template_node, conf, workflow)
+
+        for index, strat in enumerate(reg_strat_list):
+            for rsc_key in strat.resource_pool.keys():
+                rsc_nodes_suffix = 'long_reg_to_standard_' + str(index)
+                if rsc_key in Outputs.any:
+                    node, rsc_name = strat[rsc_key]
+                    ds = create_datasink(rsc_key + rsc_nodes_suffix, conf, subject_id, strat_name=strat_name)
+                    workflow.connect(node, rsc_name, ds, rsc_key)
 
         # the in{}.format take i+1 because the Merge nodes inputs starts at 1 ...
-
         for i in range(len(strat_nodes_list)):
             rsc_nodes_suffix = "_%s_%d" % (node_suffix, i)
             for rsc_key in strat_nodes_list[i].resource_pool.keys():
@@ -1305,6 +1209,6 @@ def anat_longitudinal_workflow(sub_list, subject_id, conf):
                              'in{}'.format(i + 1))
 
         workflow.connect(merge_node, 'out', template_node, 'img_list')
+
     workflow.run()
-    print('anatomical' in Outputs.any)
     return

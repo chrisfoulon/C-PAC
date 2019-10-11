@@ -438,33 +438,6 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
 
         strat_initial.update_resource_pool({template_name: (resampled_template, 'resampled_template')})
 
-    # if the image has already been registered with the longitudinal preproc
-    if 'reg_anat' in sub_dict.keys():
-        lesion_datasource = create_anat_datasource(
-            'reg_anat_gather_%d' % num_strat)
-        lesion_datasource.inputs.inputnode.subject = subject_id
-        lesion_datasource.inputs.inputnode.anat = sub_dict['reg_anat']
-        lesion_datasource.inputs.inputnode.creds_path = input_creds_path
-        lesion_datasource.inputs.inputnode.dl_dir = c.workingDirectory
-
-        strat_initial.update_resource_pool({
-            'reg_anat': (lesion_datasource, 'outputspec.anat')
-        })
-    # the longitudinal preproc will also output a local template specific to
-    # the subject
-    if 'local_template' in sub_dict.keys():
-        local_template_datasource = create_anat_datasource(
-            'local_template_gather_%d' % num_strat)
-        local_template_datasource.inputs.inputnode.subject = subject_id
-        local_template_datasource.inputs.inputnode.anat = \
-            sub_dict['local_template']
-        local_template_datasource.inputs.inputnode.creds_path = input_creds_path
-        local_template_datasource.inputs.inputnode.dl_dir = c.workingDirectory
-
-        strat_initial.update_resource_pool({
-            'local_template': (local_template_datasource, 'outputspec.anat')
-        })
-
     template_center_of_mass = pe.Node(interface=afni.CenterMass(),
                                       name='template_cmass')
     template_center_of_mass.inputs.cm_file = os.path.join(
@@ -479,8 +452,11 @@ def prep_workflow(sub_dict, c, run, pipeline_timing_info=None,
 
     new_strat_list = []
 
-    for num_strat, strat in enumerate(strat_list):
+    outputs_list = ['anatomical_brain', 'anatomical_reorient']
 
+    for num_strat, strat in enumerate(strat_list):
+        if all(output in strat.resource_pool.keys() for output in outputs_list):
+            continue
         if 'anatomical_brain_mask' in strat:
 
             anat_preproc = create_anat_preproc(method='mask',

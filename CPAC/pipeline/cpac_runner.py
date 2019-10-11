@@ -320,8 +320,6 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
                 subj = [s for s in subject_specific_dict.keys() if s in rsc_path]
                 if subj:
                     subject_specific_dict[subj[0]].append(rsc_path)
-        print(subject_specific_dict)
-        print(session_specific_dict)
 
         for key in session_specific_dict.keys():
             for f in session_specific_dict[key]:
@@ -386,6 +384,7 @@ def run(subject_list_file, config_file=None, p_name=None, plugin=None,
                                     })
 
         yaml.dump(sublist, open('/outputs/output/data_config_long_reg.yml', 'w'), default_flow_style=False)
+
         import sys
         sys.exit()
 

@@ -12,6 +12,7 @@ import nipype.interfaces.utility as util
 import nipype.interfaces.fsl as fsl
 from nipype.interfaces.fsl import ConvertXFM
 
+
 def read_ants_mat(ants_mat_file):
     if not os.path.exists(ants_mat_file):
         raise ValueError(str(ants_mat_file) + " does not exist.")
@@ -285,7 +286,8 @@ def template_creation_flirt(img_list, output_folder,
         path to the final template
 
     """
-    return 'CECI_EST_UN_TEST'
+    # DEBUG to skip the longitudinal template generation which takes a lot of time.
+    # return 'CECI_EST_UN_TEST'
 
     if isinstance(thread_pool, int):
         pool = ThreadPool(thread_pool)
@@ -306,6 +308,9 @@ def template_creation_flirt(img_list, output_folder,
     final_warp_list_filenames = [os.path.join(
         output_folder, str(ntpath.basename(img).split('.')[0]) + 'anat_to_template.mat') for img in img_list]
 
+    # I added this part because it is mentioned in the paper but I actually never used it
+    # You could run a first register_img_list() with a selected image as starting point and
+    # give the output to this function
     if init_reg is not None:
         if isinstance(init_reg, list):
             image_list = [node.inputs.out_file for node in init_reg]
@@ -323,6 +328,10 @@ def template_creation_flirt(img_list, output_folder,
 
     tmp_template = os.path.join(output_folder, 'tmp_template.nii.gz')
 
+    """ First is calculated an average image of the dataset to be the temporary template
+    and the loop stops when this temporary template is close enough (with a transformation
+    distance smaller than the threshold) to all the images of the precedent iteration.
+    """
     while not converged:
         tmp_template = create_temporary_template(image_list,
                                                  out_path=tmp_template,
